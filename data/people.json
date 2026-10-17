@@ -1,0 +1,13 @@
+[
+  {"id": "pm1",  "name": "Alice", "role": "pm",       "skills": {"pm": 5},            "capacity": 2},
+  {"id": "pm2",  "name": "Ben",   "role": "pm",       "skills": {"pm": 3}},
+  {"id": "an1",  "name": "Carol", "role": "analyst",  "skills": {"analyst": 4}},
+  {"id": "an2",  "name": "Dan",   "role": "analyst",  "skills": {"analyst": 2}},
+  {"id": "eng1", "name": "Eve",   "role": "engineer", "skills": {"engineer": 5},      "capacity": 2},
+  {"id": "eng2", "name": "Frank", "role": "engineer", "skills": {"engineer": 4}},
+  {"id": "eng3", "name": "Grace", "role": "engineer", "skills": {"engineer": 3}},
+  {"id": "eng4", "name": "Hank",  "role": "engineer", "skills": {"engineer": 2}},
+  {"id": "qa1",  "name": "Ivy",   "role": "qa",       "skills": {"qa": 4}},
+  {"id": "qa2",  "name": "Jack",  "role": "qa",       "skills": {"qa": 2},
+   "leave": [["2026-11-09", "2026-11-20"]]}
+]
