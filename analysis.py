@@ -10,21 +10,22 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import timedelta
 
-import math
-
-from engine import week_of, _unavailable_weeks
+import methodology
+from engine import week_of, week_capacity, WEEK, DAY
 from models import Person, Project, Plan
 
 
 @dataclass
 class PersonStats:
     person: Person
-    booked_weeks: int = 0          # person-weeks of load (sum over weeks of concurrent projects)
-    available_weeks: int = 0
-    peak_load: int = 0             # max concurrent projects in any week
-    util: float = 0.0              # booked / (capacity * available) — can exceed 100%
-    overloaded: bool = False       # some week has load > capacity
+    booked_weeks: float = 0        # full-time person-weeks of work booked in the active window
+    available_weeks: float = 0     # working weeks in the window (leave / not-started days excluded)
+    capacity_weeks: float = 0      # available_weeks x capacity: what could be booked
+    peak_load: float = 0           # busiest week, in full-time roles (1.0 = one full-time role)
+    util: float = 0.0              # booked / capacity_weeks over the active window
+    overloaded: bool = False       # some week is booked past capacity + allowed cover
     idle: bool = False             # utilization < 30%
+    cover_days: int = 0            # person-days someone else must cover (short leave)
 
 
 @dataclass
@@ -35,31 +36,54 @@ class ProjectRisk:
     done_week: int | None = None
     done_date: str | None = None
     days_left: int | None = None   # days from expected completion to deadline
+    milestones: list | None = None  # [{stage, due, planned, days_left}] for waterfall stage due dates
+
+    @property
+    def late_days(self) -> int:
+        """Days late by the worst of the deadline and the stage due dates (0 if not late)."""
+        if self.risk != "late":
+            return 0
+        return max([0, -(self.days_left or 0)] + [-m["days_left"] for m in self.milestones or []])
 
 
-def _person_stats(args: tuple[Person, Plan]) -> PersonStats:
-    person, plan = args
-    weeks = plan.committed.get(person.id, {})
-    booked = sum(len(s) for s in weeks.values())          # person-weeks (counts overlap)
-    peak = max((len(s) for s in weeks.values()), default=0)
-    off = len(_unavailable_weeks(person, plan.start_date) & set(range(plan.horizon_weeks)))
-    available = plan.horizon_weeks - off
-    denom = person.capacity * available
-    util = booked / denom if denom else 0.0
+def active_weeks(plan: Plan, projects: list[Project]) -> int:
+    """Weeks that actually carry work: up to the last finish or last deadline.
+
+    The solver horizon pads ~6+ weeks of slack past the last deadline; dividing
+    load by it made a half-busy engineer look 20% utilized.
+    """
+    dur = {p.id: p.duration_weeks for p in projects}
+    last_finish = max((a.start_week + dur.get(a.project_id, 0) for a in plan.assignments), default=0)
+    last_deadline = max((week_of(p.deadline, plan.start_date) + 1 for p in projects), default=0)
+    return max(1, min(plan.horizon_weeks, max(last_finish, last_deadline)))
+
+
+def _person_stats(args: tuple[Person, Plan, int]) -> PersonStats:
+    person, plan, window = args
+    load = plan.load.get(person.id, {})
+    booked = sum(u for w, u in load.items() if w < window)
+    caps = [week_capacity(person, plan.start_date, w) for w in range(window)]
+    avail = sum(a for a, _ in caps)
+    cover = sum(max(0, load.get(w, 0) - a) for w, (a, _) in enumerate(caps))
+    over = any(load.get(w, 0) > a + c for w, (a, c) in enumerate(caps))
+    util = booked / avail if avail else 0.0
     return PersonStats(
         person=person,
-        booked_weeks=booked,
-        available_weeks=available,
-        peak_load=peak,
+        booked_weeks=round(booked / WEEK, 1),
+        available_weeks=round(avail / (WEEK * person.capacity), 1) if person.capacity else 0,
+        capacity_weeks=round(avail / WEEK, 1),
+        peak_load=round(max(load.values(), default=0) / WEEK, 2),
         util=util,
-        overloaded=peak > person.capacity,
+        overloaded=over,
         idle=util < 0.3,
+        cover_days=cover // DAY,
     )
 
 
 def analyze(plan: Plan, people: list[Person], projects: list[Project]) -> tuple[list[PersonStats], list[ProjectRisk]]:
     with ThreadPoolExecutor() as pool:
-        person_stats = list(pool.map(_person_stats, [(p, plan) for p in people]))
+        window = active_weeks(plan, projects)
+        person_stats = list(pool.map(_person_stats, [(p, plan, window) for p in people]))
     risks = _project_risks(plan, projects)
     return person_stats, risks
 
@@ -76,8 +100,10 @@ def _project_risks(plan: Plan, projects: list[Project]) -> list[ProjectRisk]:
         if a is None:
             out.append(ProjectRisk(proj, "unstaffable"))
             continue
-        done_week = a.start_week + proj.duration_weeks
-        done_date = plan.start_date + timedelta(weeks=done_week)
+        last_week = a.start_week + max(proj.duration_weeks, 1) - 1
+        # Weeks start Monday; finish = Friday of the last occupied week.
+        done_week = last_week
+        done_date = plan.start_date + timedelta(weeks=last_week, days=4)
         days_left = (proj.deadline - done_date).days
         if days_left < 0:
             risk = "late"
@@ -85,22 +111,29 @@ def _project_risks(plan: Plan, projects: list[Project]) -> list[ProjectRisk]:
             risk = "tight"
         else:
             risk = "ok"
+        ms = []
+        for stage, due in proj.milestones.items():
+            end = methodology.stage_end(proj.stages, stage)
+            if end is None:
+                continue
+            planned = plan.start_date + timedelta(weeks=a.start_week + end, days=4)
+            ms.append({"stage": stage, "due": due.isoformat(), "planned": planned.isoformat(),
+                       "days_left": (due - planned).days})
+        if risk != "late" and any(m["days_left"] < 0 for m in ms):
+            risk = "late"   # a missed contractual stage date is a late project
         out.append(ProjectRisk(proj, risk, a.start_week, done_week,
-                               done_date.isoformat(), days_left))
+                               done_date.isoformat(), days_left, ms))
     return out
 
 
-def _remaining_weeks(person: Person, plan: Plan) -> int:
-    """Free person-weeks (capacity - load) over the horizon, excluding leave."""
-    cap = max(1, math.ceil(person.capacity))
-    off = _unavailable_weeks(person, plan.start_date)
+def _remaining_in_window(person: Person, plan: Plan, last_week: int) -> float:
+    """Free full-time person-weeks inside [0, last_week), leave excluded."""
     free = 0
-    for w in range(plan.horizon_weeks):
-        if w in off:
-            continue
-        load = len(plan.committed.get(person.id, {}).get(w, set()))
-        free += max(0, cap - load)
-    return free
+    end = min(max(last_week, 0), plan.horizon_weeks)
+    for w in range(end):
+        avail, _ = week_capacity(person, plan.start_date, w)
+        free += max(0, avail - plan.load.get(person.id, {}).get(w, 0))
+    return free / WEEK
 
 
 def find_bottlenecks(plan: Plan, people: list[Person], projects: list[Project],
@@ -108,53 +141,65 @@ def find_bottlenecks(plan: Plan, people: list[Person], projects: list[Project],
                      ) -> list[dict]:
     """Scarce (role, level) that actually cause lateness or dropped projects.
 
-    A role is a bottleneck only when a late/unstaffable project needs it AND
-    every qualified person is packed (or there is a single busy specialist).
-    Idle qualified people (e.g. Ben the PM) mean that role is not the constraint.
+    Unique specialists needed by late work are bottlenecks even if they have
+    slack later in a long horizon. Idle qualified people (e.g. Ben the PM)
+    still mean that role is not the constraint.
     """
     util = {s.person.id: s.util for s in (pstats or [])}
     troubled = {r.project.id for r in risks if r.risk in ("late", "unstaffable")}
     troubled.update(pid for pid, _ in plan.unstaffable)
 
     demand: dict[tuple[str, int], list[str]] = {}
+    crit = 0
+    pmeta = {p.id: p for p in projects}
     for proj in projects:
         if proj.id not in troubled:
             continue
+        crit = max(crit, week_of(proj.deadline, plan.start_date) + 2)
         for role in proj.roles():
             key = (role, proj.level_for(role))
             demand.setdefault(key, []).append(proj.name)
+    for a in plan.assignments:
+        if a.project_id in troubled and a.project_id in pmeta:
+            j = pmeta[a.project_id]
+            crit = max(crit, a.start_week + j.duration_weeks)
+    crit = min(max(crit, 8), plan.horizon_weeks)
 
     out: list[dict] = []
     seen: set[tuple[str, int]] = set()
-    for (role, lvl), names in sorted(demand.items()):
-        qualified = [p for p in people if p.level(role) >= lvl]
+    seen_groups: set[tuple[str, frozenset]] = set()
+    ranked = sorted(demand.items(), key=lambda kv: (-len(kv[1]), kv[0][0], -kv[0][1]))
+    for (role, lvl), names in ranked:
         if (role, lvl) in seen:
             continue
         seen.add((role, lvl))
+        qualified = [p for p in people if p.level(role) >= lvl]
+        # analyst≥4 and analyst≥3 held by the same people are one bottleneck
+        group = (role, frozenset(p.id for p in qualified))
+        if qualified and group in seen_groups:
+            continue
+        seen_groups.add(group)
         qnames = ", ".join(p.name for p in qualified) if qualified else ""
         if not qualified:
             out.append({
                 "role": role, "level": lvl,
-                "detail": f"không ai đủ {role}≥{lvl}; ảnh hưởng: {', '.join(names)}",
+                "detail": f"nobody has {role}≥{lvl}; affects: {', '.join(names)}",
             })
             continue
-        slack = [p for p in qualified if _remaining_weeks(p, plan) >= 3]
-        remaining = _remaining_weeks(qualified[0], plan) if qualified else 0
-        busy_unique = (
-            len(qualified) == 1
-            and util.get(qualified[0].id, 0) >= 0.6
-            and remaining <= 3
-        )
-        all_packed = not slack
-        if busy_unique or all_packed:
-            if len(qualified) == 1:
+        slack = [p for p in qualified if _remaining_in_window(p, plan, crit) >= 3]
+        unique = len(qualified) == 1
+        packed = not slack
+        # Unique person for a role late work needs = bottleneck (Ivy / QA≥3).
+        # Several people with slack in the critical window (Ben the PM) are not.
+        if unique or packed:
+            if unique:
                 who = qualified[0].name
                 pct = round(util.get(qualified[0].id, 0) * 100)
-                detail = (f"chỉ {who} đủ {role}≥{lvl}"
-                          + (f" (tải {pct}%)" if pct else "")
-                          + f"; {len(names)} dự án trễ/không xếp được cần vai trò này")
+                detail = (f"only {who} has {role}≥{lvl}"
+                          + (f" (load {pct}%)" if pct else "")
+                          + f"; {len(names)} late/unstaffed project(s) need this role")
             else:
-                detail = (f"{qnames} đủ {role}≥{lvl} đều kín lịch; "
-                          f"ảnh hưởng: {', '.join(names)}")
+                detail = (f"{qnames} have {role}≥{lvl} but are fully booked; "
+                          f"affects: {', '.join(names)}")
             out.append({"role": role, "level": lvl, "detail": detail})
     return out

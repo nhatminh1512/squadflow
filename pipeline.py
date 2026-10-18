@@ -41,19 +41,22 @@ def run(
     pins: list | None = None,
     freeze=None,
     time_limit_s: float = 15.0,
+    keep_squads: bool = False,
 ):
     """Run the pipeline. use_cp_sat defaults to auto: CP-SAT if ortools is
-    installed, greedy otherwise."""
+    installed, greedy otherwise. keep_squads (CP-SAT only): previously staffed
+    roles keep their people, only dates move."""
     if use_cp_sat is None:
         use_cp_sat = optimizer.has_cp_sat()
     if use_cp_sat:
         plan = optimizer.cp_sat_assign(
             people, projects, start_date,
             time_limit_s=time_limit_s,
-            prev_assignments=None if freeze else prev_assignments,
-            pins=pins, freeze=freeze,
+            prev_assignments=prev_assignments,
+            pins=pins, freeze=freeze, keep_squads=keep_squads,
         )
     else:
-        plan = assign(people, projects, start_date)
+        plan = assign(people, projects, start_date, freeze=freeze, pins=pins)
     person_stats, risks = analyze(plan, people, projects)
     return plan, person_stats, risks
+

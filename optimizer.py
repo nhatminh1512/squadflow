@@ -2,6 +2,9 @@
 
 Model: assign each project a start week and each required role a qualified,
 available person, so that no one exceeds capacity and dependencies hold.
+Capacity is counted in person-days per week (engine.DAY units): a role books
+effort% of a full-time week during its own phase only; a short leave may
+leave up to engine.MAX_COVER_DAYS per week to cover, at OVER_W per day.
 Deadlines are SOFT: a project may run past its deadline, but lateness is
 penalized (LATE_W * priority * weeks-late), so the solver prefers on-time
 placement yet still schedules (and flags) a late project instead of silently
@@ -12,12 +15,11 @@ ortools is imported lazily — the rest of squadflow runs without it.
 """
 from __future__ import annotations
 
-import math
 import threading
 from collections import defaultdict
 from datetime import date
 
-from engine import week_of, _unavailable_weeks
+from engine import week_of, SLACK_WEEKS, DAY, WEEK, role_load, week_capacity, book, role_fits
 from models import Person, Project, Assignment, Plan
 
 # OR-Tools is not safe to run two CP-SAT models on one process at once
@@ -25,12 +27,16 @@ from models import Person, Project, Assignment, Plan
 _SOLVE_LOCK = threading.Lock()
 
 BIG = 10_000        # dropping a project always beats scheduling it
-LATE_W = 250        # one week late == this many weeks of start-delay (soft deadline)
+LATE_W = 100        # one week late == this many weeks of start-delay (soft deadline)
 BALANCE_W = 2       # per percentage-point of peak util within a role (<< LATE_W)
 SKILL_W = 2         # prefer the least-qualified acceptable person
 STICKY_W = 120      # cost of swapping a person off a previously-staffed role
 TIE_W = 3           # FIFO: earlier projects in the list win exact ties
-SLACK_WEEKS = 4     # extra horizon weeks past the latest deadline
+OVER_W = 8          # per person-day someone must cover for a short leave (<< a week late)
+
+
+def _nonzero(load: dict) -> dict[str, dict[int, int]]:
+    return {pid: {w: u for w, u in weeks.items() if u} for pid, weeks in load.items()}
 
 
 def has_cp_sat() -> bool:
@@ -55,7 +61,7 @@ def _why_dropped(j: Project, people: list[Person], projects: list[Project] | Non
         depj = jmeta.get(dep)
         name = depj.name if depj else dep
         if scheduled_val.get(dep, 1) == 0:
-            return f"đang chờ dự án “{name}” chưa xếp được"
+            return f"waiting on “{name}”, which could not be staffed"
 
     for jid, role, pid in pins or []:
         if jid != j.id:
@@ -63,12 +69,12 @@ def _why_dropped(j: Project, people: list[Person], projects: list[Project] | Non
         person = pidx.get(pid)
         who = person.name if person else pid
         if role not in j.roles():
-            return f"ghim {who} vào {role} nhưng “{j.name}” không cần vai trò đó"
+            return f"{who} is pinned to {role}, but “{j.name}” does not need that role"
         if person is not None and person.level(role) < j.level_for(role):
-            return (f"ghim {who} ({role} {person.level(role)}) vào “{j.name}” "
-                    f"nhưng cần {role}≥{j.level_for(role)}")
-        return (f"ghim {who} vào {role} của “{j.name}” nhưng không xếp được lịch "
-                f"(nghỉ phép hoặc trùng việc)")
+            return (f"{who} ({role} {person.level(role)}) is pinned to “{j.name}” "
+                    f"but it needs {role}≥{j.level_for(role)}")
+        return (f"{who} is pinned to {role} on “{j.name}” but has no free slot "
+                f"(on leave, not started yet, or already booked)")
 
     ranked: list[tuple] = []
     for role in j.roles():
@@ -83,52 +89,104 @@ def _why_dropped(j: Project, people: list[Person], projects: list[Project] | Non
         else:
             ranked.append((2, len(qualified), role, lvl, count, names, "busy"))
     if not ranked:
-        return "thiếu nhân sự"
+        return "not enough people"
     ranked.sort(key=lambda t: (t[0], t[1]))
     _, n, role, lvl, count, names, kind = ranked[0]
     if kind == "none":
-        return f"thiếu người {role} trình độ ≥ {lvl} (không ai đủ chuẩn)"
+        return f"no {role} with level ≥ {lvl} (nobody qualifies)"
     if kind == "short":
-        return (f"thiếu người {role} trình độ ≥ {lvl}: chỉ có {n} người "
-                f"({names}) trong khi cần {count}")
-    return (f"thiếu người {role} trình độ ≥ {lvl} ({names}) — "
-            f"đều bận hoặc nghỉ, không đủ slot trống")
+        return (f"not enough {role} with level ≥ {lvl}: only {n} "
+                f"({names}) but {count} needed")
+    return (f"not enough {role} with level ≥ {lvl} ({names}) — "
+            f"all busy or on leave, no free slot")
 
 
 def cp_sat_assign(people: list[Person], projects: list[Project],
                   start_date: date, time_limit_s: float = 15.0,
                   prev_assignments: list[Assignment] | None = None,
                   pins: list[tuple[str, str, str]] | None = None,
-                  freeze: list[Assignment] | None = None) -> Plan:
+                  freeze: list[Assignment] | None = None,
+                  keep_squads: bool = False) -> Plan:
     with _SOLVE_LOCK:
         return _cp_sat_assign(people, projects, start_date, time_limit_s,
-                              prev_assignments, pins, freeze)
+                              prev_assignments, pins, freeze, keep_squads)
 
 
 def _cp_sat_assign(people: list[Person], projects: list[Project],
                    start_date: date, time_limit_s: float = 15.0,
                    prev_assignments: list[Assignment] | None = None,
                    pins: list[tuple[str, str, str]] | None = None,
-                   freeze: list[Assignment] | None = None) -> Plan:
+                   freeze: list[Assignment] | None = None,
+                   keep_squads: bool = False) -> Plan:
+    """keep_squads: previously staffed roles must keep the same people
+    (only dates may move) — the 'keep squads' what-if option."""
     from ortools.sat.python import cp_model
 
-    unavailable = {p.id: _unavailable_weeks(p, start_date) for p in people}
     pidx = {p.id: p for p in people}
     jmeta = {j.id: j for j in projects}
     deadline_week = {j.id: week_of(j.deadline, start_date) for j in projects}
 
-    # horizon: room to schedule every project, even a few weeks late
+    # Freeze is a HARD copy of old assignments: those projects are not variables.
+    # Remaining capacity is what is left after the frozen load is subtracted.
+    freeze_map: dict[str, Assignment] = {}
+    for a in freeze or []:
+        if a.project_id in jmeta:
+            freeze_map[a.project_id] = a
+    frozen_load: dict[str, dict[int, int]] = defaultdict(lambda: defaultdict(int))  # units
+    frozen_assignments: list[Assignment] = []
+    frozen_committed: dict[str, dict[int, set[str]]] = defaultdict(lambda: defaultdict(set))
+    frozen_decisions: list[dict] = []
+    freeze_finish: dict[str, int] = {}
+    for jid, a in freeze_map.items():
+        j = jmeta[jid]
+        s = int(a.start_week)
+        squad = {
+            r: list(pids if isinstance(pids, list) else [pids])
+            for r, pids in a.squad.items()
+        }
+        frozen_assignments.append(Assignment(jid, s, squad))
+        freeze_finish[jid] = s + j.duration_weeks
+        for role, pids in squad.items():
+            lvl = j.level_for(role)
+            elig = [p for p in people if p.level(role) >= lvl]
+            n_elig = len(elig)
+            min_elig = min((p.level(role) for p in elig), default=lvl)
+            for pid in pids:
+                person = pidx.get(pid)
+                chosen_lvl = person.level(role) if person else lvl
+                frozen_decisions.append({
+                    "project_id": jid, "role": role, "min_level": lvl,
+                    "person_id": pid, "chosen_level": chosen_lvl,
+                    "start_week": s, "overloaded": False,
+                    "n_eligible": n_elig, "n_feasible": n_elig, "solver": "cp_sat",
+                    "least_qualified": chosen_lvl == min_elig,
+                    "frozen": True,
+                })
+                book(frozen_load, frozen_committed, j, role, pid, s)
+
+    active = [j for j in projects if j.id not in freeze_map]
+
+    # horizon: room to schedule every project sequentially, even a few weeks late
     max_deadline = max((week_of(j.deadline, start_date) for j in projects), default=0)
     max_dur = max((j.duration_weeks for j in projects), default=1)
-    horizon = max(max_deadline + SLACK_WEEKS, max_dur) + 1
+    total_dur = sum(j.duration_weeks for j in projects)
+    horizon = max(max_deadline + SLACK_WEEKS, max_dur, total_dur) + 1
+    for a in freeze_map.values():
+        j = jmeta[a.project_id]
+        horizon = max(horizon, int(a.start_week) + j.duration_weeks + SLACK_WEEKS)
+
+    if not active:
+        return Plan(start_date, horizon, frozen_assignments, [], dict(frozen_committed),
+                    frozen_decisions, _nonzero(frozen_load))
 
     m = cp_model.CpModel()
+    wcap = {p.id: [week_capacity(p, start_date, w) for w in range(horizon)] for p in people}
 
-    # ---- variables ----
+    # ---- variables (unfrozen projects only) ----
     # y[(jid, role, pid, s)] : person pid does role of project jid starting week s
     y: dict = {}
     max_start = {}
-    for j in projects:
+    for j in active:
         dur = j.duration_weeks
         max_start[j.id] = horizon - dur
         for r in j.roles():
@@ -137,22 +195,22 @@ def _cp_sat_assign(people: list[Person], projects: list[Project],
                 if p.level(r) < lvl:
                     continue
                 for s in range(0, max_start[j.id] + 1):
-                    weeks = range(s, s + dur)
-                    if any(w < 0 or w in unavailable[p.id] for w in weeks):
+                    # static check: leave / not-started weeks alone already rule it out
+                    if not role_fits(p, j, r, s, start_date):
                         continue
                     y[(j.id, r, p.id, s)] = m.NewBoolVar(f"y_{j.id}_{r}_{p.id}_{s}")
 
-    scheduled = {j.id: m.NewBoolVar(f"sched_{j.id}") for j in projects}
+    scheduled = {j.id: m.NewBoolVar(f"sched_{j.id}") for j in active}
     start_week = {j.id: m.NewIntVar(0, max(max_start[j.id], 0), f"start_{j.id}")
-                  for j in projects}
-    late = {j.id: m.NewIntVar(0, horizon, f"late_{j.id}") for j in projects}
+                  for j in active}
+    late = {j.id: m.NewIntVar(0, horizon, f"late_{j.id}") for j in active}
     start_at = {}
-    for j in projects:
+    for j in active:
         for s in range(0, max_start[j.id] + 1):
             start_at[(j.id, s)] = m.NewBoolVar(f"sa_{j.id}_{s}")
 
     # ---- project start consistency + lateness (soft deadline) ----
-    for j in projects:
+    for j in active:
         for s in range(0, max_start[j.id] + 1):
             m.Add(start_at[(j.id, s)] <= scheduled[j.id])
         m.Add(sum(start_at[(j.id, s)] for s in range(0, max_start[j.id] + 1))
@@ -160,10 +218,23 @@ def _cp_sat_assign(people: list[Person], projects: list[Project],
         m.Add(start_week[j.id] == sum(
             s * start_at[(j.id, s)] for s in range(0, max_start[j.id] + 1)))
         # late >= start + duration - deadline_week (0 when on time)
-        m.Add(late[j.id] >= start_week[j.id] + j.duration_weeks - deadline_week[j.id])
+        # last occupied week is start + duration - 1; Friday of that week is still that week
+        m.Add(late[j.id] >= start_week[j.id] + j.duration_weeks - 1 - deadline_week[j.id])
+
+    # ---- stage milestones (waterfall): soft, weighed like the deadline ----
+    import methodology
+    milestone_late = []
+    for j in active:
+        for stage, due in j.milestones.items():
+            end = methodology.stage_end(j.stages, stage)
+            if end is None:
+                continue
+            ml = m.NewIntVar(0, horizon, f"ml_{j.id}_{stage}")
+            m.Add(ml >= start_week[j.id] + end - week_of(due, start_date))
+            milestone_late.append(j.priority * ml)
 
     # ---- role filled exactly `count` times per scheduled project ----
-    for j in projects:
+    for j in active:
         for r in j.roles():
             count = j.count_for(r)
             terms = [y[k] for k in y if k[0] == j.id and k[1] == r]
@@ -174,7 +245,7 @@ def _cp_sat_assign(people: list[Person], projects: list[Project],
             m.Add(sum(terms) == count * scheduled[j.id])
 
     # ---- a person does at most one role per project, and only at project's start ----
-    for j in projects:
+    for j in active:
         for p in people:
             terms = [y[k] for k in y if k[0] == j.id and k[2] == p.id]
             if terms:
@@ -185,23 +256,33 @@ def _cp_sat_assign(people: list[Person], projects: list[Project],
                     if (j.id, r, p.id, s) in y:
                         m.Add(y[(j.id, r, p.id, s)] <= start_at[(j.id, s)])
 
-    # ---- capacity: concurrent load <= capacity per person per week ----
-    cap = {p.id: max(1, math.ceil(p.capacity)) for p in people}
+    # ---- capacity HARD (person-days per week) + soft cover for short leave ----
+    by_person: dict[str, list[tuple]] = defaultdict(list)
+    for (jid, r, pid, s), var in y.items():
+        j = jmeta[jid]
+        by_person[pid].append((var, role_load(j, r, s)))
+    over_days = []
     for p in people:
         for w in range(horizon):
-            terms = []
-            for (jid, r, pid, s), var in y.items():
-                if pid == p.id and s <= w < s + jmeta[jid].duration_weeks:
-                    terms.append(var)
-            if terms:
-                m.Add(sum(terms) <= cap[p.id])
+            terms = [wl[w] * var for var, wl in by_person[p.id] if w in wl]
+            if not terms:
+                continue
+            avail, cover = wcap[p.id][w]
+            booked = sum(terms) + frozen_load.get(p.id, {}).get(w, 0)
+            m.Add(booked <= avail + cover)
+            if cover:
+                od = m.NewIntVar(0, cover // DAY, f"over_{p.id}_{w}")
+                m.Add(DAY * od >= booked - avail)
+                over_days.append(od)
 
-    # ---- dependencies ----
-    for j in projects:
+    # ---- dependencies (frozen deps pin the earliest start of active projects) ----
+    for j in active:
         for dep in j.depends_on:
-            if dep in scheduled:
+            if dep in freeze_map:
+                m.Add(start_week[j.id] >= freeze_finish[dep]
+                      ).OnlyEnforceIf(scheduled[j.id])
+            elif dep in scheduled:
                 m.Add(scheduled[j.id] <= scheduled[dep])
-                # only enforce the start-ordering when j is actually scheduled
                 m.Add(start_week[j.id] >= start_week[dep] + jmeta[dep].duration_weeks
                       ).OnlyEnforceIf(scheduled[j.id])
 
@@ -216,35 +297,14 @@ def _cp_sat_assign(people: list[Person], projects: list[Project],
         else:
             m.Add(sum(terms) == scheduled[jid])
 
-    # ---- freeze: keep old projects at the exact start week and squad ----
-    for a in freeze or []:
-        jid = a.project_id
-        if jid not in scheduled:
-            continue
-        s = int(a.start_week)
-        if (jid, s) not in start_at:
-            continue
-        m.Add(scheduled[jid] == 1)
-        m.Add(start_at[(jid, s)] == 1)
-        for role, pids in a.squad.items():
-            arr = pids if isinstance(pids, list) else [pids]
-            for pid in arr:
-                key = (jid, role, pid, s)
-                if key in y:
-                    m.Add(y[key] == 1)
-
-    # ---- load (person-weeks) for balance + skill preference ----
+    # ---- load (person-weeks, in % of a full-time week) for balance ----
     load = {}
     for p in people:
-        terms = []
-        coeffs = []
-        for (jid, r, pid, s), var in y.items():
-            if pid == p.id:
-                terms.append(var)
-                coeffs.append(jmeta[jid].duration_weeks)
-        load[p.id] = m.NewIntVar(0, horizon * cap[p.id], f"load_{p.id}")
+        terms = [(sum(wl.values()) * 100 // WEEK, var) for var, wl in by_person[p.id]]
+        cap_total = sum(a + c for a, c in wcap[p.id]) * 100 // WEEK
+        load[p.id] = m.NewIntVar(0, max(cap_total, 1), f"load_{p.id}")
         if terms:
-            m.Add(load[p.id] == sum(c * t for c, t in zip(coeffs, terms)))
+            m.Add(load[p.id] == sum(c * t for c, t in terms))
         else:
             m.Add(load[p.id] == 0)
 
@@ -259,10 +319,9 @@ def _cp_sat_assign(people: list[Person], projects: list[Project],
             continue
         utils = []
         for p in members:
-            off = len(unavailable[p.id] & set(range(horizon)))
-            avail = max(1, horizon - off)
-            denom = max(1, cap[p.id] * avail)
-            u = m.NewIntVar(0, 200, f"util_{p.id}")
+            # available person-weeks (in %) over the horizon; leave and pre-start excluded
+            denom = max(1, sum(a for a, _ in wcap[p.id]) * 100 // WEEK)
+            u = m.NewIntVar(0, 400, f"util_{p.id}")
             m.AddDivisionEquality(u, load[p.id] * 100, denom)
             utils.append(u)
         peak = m.NewIntVar(0, 200, f"peak_{role}")
@@ -294,18 +353,22 @@ def _cp_sat_assign(people: list[Person], projects: list[Project],
         missing = m.NewIntVar(0, max(len(pids), 1), f"miss_{jid}_{role}")
         m.Add(missing == len(pids) * scheduled[jid] - kept)
         sticky_missing.append(missing)
+        if keep_squads:
+            m.Add(missing == 0)
 
     # ---- objective: schedule (esp. high priority), then on-time, then early,
     #      then keep old squads, then spread load, then prefer juniors.
     #      FIFO tie-break: earlier items in the projects list win exact ties. ----
-    nproj = max(len(projects), 1)
+    nproj = max(len(active), 1)
     m.Minimize(
         sum(
             p.priority * (BIG * (1 - scheduled[p.id]) + start_week[p.id] + LATE_W * late[p.id])
             + TIE_W * (nproj - i) * (1 - scheduled[p.id])
-            for i, p in enumerate(projects)
+            for i, p in enumerate(active)
         )
         + STICKY_W * sum(sticky_missing)
+        + LATE_W * sum(milestone_late)
+        + OVER_W * sum(over_days)
         + BALANCE_W * sum(peak_util_terms)
         + SKILL_W * skill_cost
     )
@@ -318,20 +381,43 @@ def _cp_sat_assign(people: list[Person], projects: list[Project],
     status = solver.Solve(m)
 
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        # fall back to greedy on any failure
+        # Keep the frozen plan intact. Drop only the unfrozen projects rather
+        # than silently unfreezing everything and reshuffling old squads.
+        if freeze_map:
+            unstaffable = [
+                (j.id, _why_dropped(j, people, projects, {}, {}, pins))
+                for j in active
+            ]
+            return Plan(
+                start_date, horizon, frozen_assignments, unstaffable,
+                dict(frozen_committed), frozen_decisions,
+            )
+        if keep_squads:
+            # every old squad cannot be kept (e.g. someone is gone for weeks):
+            # report that rather than silently swapping people
+            return Plan(start_date, horizon, frozen_assignments,
+                        [(j.id, "cannot keep the same squad (someone is unavailable)")
+                         for j in active],
+                        dict(frozen_committed), frozen_decisions, _nonzero(frozen_load))
         from engine import assign
-        return assign(people, projects, start_date)
+        return assign(people, projects, start_date, freeze=freeze, pins=pins)
 
     # ---- extract ----
-    assignments: list[Assignment] = []
+    assignments: list[Assignment] = list(frozen_assignments)
     unstaffable: list[tuple[str, str]] = []
-    decisions: list[dict] = []
+    decisions: list[dict] = list(frozen_decisions)
     committed: dict[str, dict[int, set[str]]] = defaultdict(lambda: defaultdict(set))
+    for pid, weeks in frozen_committed.items():
+        for w, jobs in weeks.items():
+            committed[pid][w].update(jobs)
+    booked: dict[str, dict[int, int]] = defaultdict(lambda: defaultdict(int))
+    for pid, weeks in frozen_load.items():
+        booked[pid].update(weeks)
 
-    scheduled_val = {j.id: solver.Value(scheduled[j.id]) for j in projects}
-    start_val = {j.id: solver.Value(start_week[j.id]) for j in projects}
+    scheduled_val = {j.id: solver.Value(scheduled[j.id]) for j in active}
+    start_val = {j.id: solver.Value(start_week[j.id]) for j in active}
 
-    for j in projects:
+    for j in active:
         if scheduled_val[j.id] == 0:
             unstaffable.append((j.id, _why_dropped(
                 j, people, projects, scheduled_val, start_val, pins,
@@ -356,8 +442,8 @@ def _cp_sat_assign(people: list[Person], projects: list[Project],
                     "n_eligible": n_elig, "n_feasible": n_elig, "solver": "cp_sat",
                     "least_qualified": chosen_lvl == min_elig,
                 })
-                for w in range(s, s + j.duration_weeks):
-                    committed[pid][w].add(j.id)
+                book(booked, committed, j, r, pid, s)
         assignments.append(Assignment(j.id, s, squad))
 
-    return Plan(start_date, horizon, assignments, unstaffable, dict(committed), decisions)
+    return Plan(start_date, horizon, assignments, unstaffable, dict(committed), decisions,
+                _nonzero(booked))

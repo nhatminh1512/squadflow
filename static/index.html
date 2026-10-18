@@ -1,132 +1,390 @@
 <!doctype html>
-<html lang="vi">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Squadflow</title>
+<title>Squadflow — Team & Project Staffing</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
 <script src="/static/tailwind.js"></script>
 <style>
-  body { background:#0b0f17; color:#e2e8f0; font-family: ui-sans-serif, system-ui, sans-serif; }
-  .tl { border:1px solid #1e293b; height:28px; display:flex; align-items:center; justify-content:center; font-size:10px; min-width:0; overflow:hidden; white-space:nowrap; letter-spacing:.02em; }
-  .tl-head { background:#0f172a; color:#64748b; font-size:9px; height:24px; font-weight:500; }
-  .tl-name { position:sticky; left:0; background:#0f172a; justify-content:flex-start; padding-left:10px; font-size:11px; z-index:1; font-weight:500; }
-  .bar { height:6px; border-radius:9999px; }
-  .chip { border-radius:4px; padding:1px 7px; font-size:10px; font-weight:600; letter-spacing:.04em; display:inline-block; }
-  .help { color:#64748b; font-size:12px; line-height:1.45; }
-  .section-title { font-size:11px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:#94a3b8; }
-  .card { background:rgba(15,23,42,.65); border:1px solid #1e293b; border-radius:12px; padding:16px 18px; }
-  .btn { font-size:13px; font-weight:500; border-radius:8px; padding:8px 14px; }
-  .btn-primary { background:#4f46e5; color:#fff; }
-  .btn-primary:hover { background:#4338ca; }
-  .btn-ghost { background:#1e293b; color:#e2e8f0; }
-  .btn-ghost:hover { background:#334155; }
-  .btn-ok { background:#059669; color:#fff; }
-  .btn-ok:hover { background:#047857; }
-  .icon-btn { font-size:11px; padding:2px 8px; border-radius:6px; background:#1e293b; color:#cbd5e1; }
-  .icon-btn:hover { background:#334155; }
-  input, select, textarea { color:#e2e8f0; }
+  :root {
+    --canvas: #f5f6f8;
+    --surface: #ffffff;
+    --subtle: #f9fafb;
+    --line: #e4e7ec;
+    --line-strong: #d0d5dd;
+    --ink: #101828;
+    --ink-2: #344054;
+    --muted: #667085;
+    --faint: #98a2b3;
+    --accent: #4f46e5;
+    --accent-ink: #4338ca;
+    --accent-soft: #eef2ff;
+    --ok: #067647;  --ok-soft: #ecfdf3;
+    --warn: #b54708; --warn-soft: #fffaeb;
+    --bad: #b42318;  --bad-soft: #fef3f2;
+  }
+  body {
+    background: var(--canvas);
+    color: var(--ink);
+    font-family: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-size: 14px;
+    -webkit-font-smoothing: antialiased;
+    font-feature-settings: "tnum" 1, "cv11" 1;
+  }
+
+  /* Surfaces */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 20px;
+    box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+  }
+  .card-subtle {
+    background: var(--subtle);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 16px;
+  }
+  .card-head {
+    display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between;
+    gap: 8px 16px; margin-bottom: 16px;
+  }
+  .card-title { font-size: 15px; font-weight: 600; color: var(--ink); letter-spacing: -0.01em; }
+  .card-sub { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+
+  /* Typography helpers (kept for dynamic content) */
+  .section-title {
+    font-size: 11px; font-weight: 600; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--muted);
+  }
+  .help { color: var(--muted); font-size: 12.5px; line-height: 1.5; }
+
+  /* Buttons */
+  .btn {
+    font-size: 13px; font-weight: 600; border-radius: 8px; padding: 8px 14px;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    transition: background-color .15s ease, border-color .15s ease, color .15s ease;
+    cursor: pointer; user-select: none; border: 1px solid transparent; line-height: 1.2;
+  }
+  .btn-primary { background: var(--accent); color: #fff; box-shadow: 0 1px 2px rgba(16,24,40,.08); }
+  .btn-primary:hover { background: var(--accent-ink); }
+  .btn-ghost { background: #fff; color: var(--ink-2); border-color: var(--line-strong); box-shadow: 0 1px 2px rgba(16,24,40,.04); }
+  .btn-ghost:hover { background: var(--subtle); color: var(--ink); }
+  .btn-text { background: transparent; color: var(--muted); }
+  .btn-text:hover { color: var(--ink); background: #eef0f3; }
+  .btn-ok { background: var(--ok); color: #fff; }
+  .btn-ok:hover { background: #05603a; }
+  .icon-btn {
+    font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 6px;
+    background: #fff; color: var(--ink-2); border: 1px solid var(--line-strong);
+    transition: background-color .12s ease, color .12s ease; cursor: pointer;
+  }
+  .icon-btn:hover { background: var(--subtle); color: var(--ink); }
+  .link-btn { font-size: 12px; font-weight: 600; color: var(--muted); cursor: pointer; }
+  .link-btn:hover { color: var(--accent); }
+
+  /* Form controls */
+  input, select, textarea {
+    color: var(--ink); background-color: #fff;
+    border: 1px solid var(--line-strong); border-radius: 8px;
+    transition: border-color .15s ease, box-shadow .15s ease;
+  }
+  input:focus, select:focus, textarea:focus {
+    outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(79,70,229,.14);
+  }
+  input::placeholder, textarea::placeholder { color: var(--faint); }
+
+  /* Chips & badges */
+  .chip {
+    border-radius: 999px; padding: 2px 8px; font-size: 11.5px; font-weight: 600;
+    display: inline-flex; align-items: center; gap: 4px; line-height: 1.4; white-space: nowrap;
+  }
+  .pill-bad  { background: var(--bad-soft);  color: var(--bad);  border: 1px solid #fecdca; }
+  .pill-warn { background: var(--warn-soft); color: var(--warn); border: 1px solid #fedf89; }
+  .pill-ok   { background: var(--ok-soft);   color: var(--ok);   border: 1px solid #abefc6; }
+  .pill-mute { background: #f2f4f7; color: var(--ink-2); border: 1px solid var(--line); }
+  .person-chip {
+    display: inline-flex; align-items: center; gap: 5px; font-size: 12px;
+    padding: 2px 8px 2px 6px; border-radius: 6px; background: #f2f4f7; color: var(--ink-2);
+    border: 1px solid var(--line); white-space: nowrap;
+  }
+  .person-chip .r { font-size: 10px; font-weight: 700; text-transform: uppercase; color: var(--muted); letter-spacing: .03em; }
+  .role-badge {
+    font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+    padding: 1px 6px; border-radius: 4px; display: inline-block;
+  }
+  .role-pm { background: #f4f3ff; color: #5925dc; }
+  .role-analyst { background: #f0f9ff; color: #026aa2; }
+  .role-engineer { background: #eef4ff; color: #3538cd; }
+  .role-qa { background: #fffaeb; color: #b54708; }
+
+  /* KPI tiles */
+  .kpi { padding: 16px 18px; }
+  .kpi-label { font-size: 12.5px; font-weight: 500; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .kpi-value { font-size: 28px; font-weight: 650; letter-spacing: -0.02em; margin-top: 6px; line-height: 1.1; }
+  .kpi-foot { font-size: 12.5px; color: var(--muted); margin-top: 6px; }
+  .dot { width: 8px; height: 8px; border-radius: 999px; display: inline-block; flex-shrink: 0; }
+
+  /* Health list */
+  .issue { display: flex; gap: 12px; align-items: flex-start; padding: 10px 0; border-top: 1px solid #f2f4f7; }
+  .issue:first-child { border-top: 0; padding-top: 0; }
+  .issue-kind { width: 92px; flex-shrink: 0; }
+
+  /* Bars */
+  .bar { height: 6px; border-radius: 999px; transition: width .3s ease; }
+
+  /* Gantt timeline */
+  .tl-grid { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: #fff; }
+  .tl { border-bottom: 1px solid #f2f4f7; height: 40px; display: flex; align-items: center;
+        min-width: 0; font-size: 11px; font-weight: 600; white-space: nowrap; }
+  .tl-head { background: var(--subtle); color: var(--muted); font-size: 11px; height: 32px;
+             justify-content: center; border-bottom: 1px solid var(--line); font-weight: 600; }
+  .tl-head.now { color: var(--accent); background: var(--accent-soft); }
+  .tl-name { position: sticky; left: 0; background: #fff; justify-content: space-between; gap: 6px;
+             padding: 0 12px; font-size: 13px; z-index: 2; color: var(--ink); border-right: 1px solid var(--line); }
+  .tl-cell { padding: 0 2px; flex-direction: column; justify-content: center; gap: 2px; }
+  .tl-cell.now { background: #f8f8ff; }
+  /* --c is the project colour; tinted fill + accent edge reads calmer than solid blocks */
+  .tl-bar { width: 100%; border-radius: 5px; display: flex; align-items: center;
+            background: color-mix(in srgb, var(--c) 14%, #fff); box-shadow: inset 3px 0 0 var(--c);
+            color: color-mix(in srgb, var(--c) 65%, #101828);
+            padding: 0 8px 0 10px; overflow: hidden; text-overflow: ellipsis; cursor: default;
+            transition: opacity .15s ease; flex: 1; max-height: 28px; font-size: 11.5px; }
+  .tl-leave { background: repeating-linear-gradient(-45deg, #f2f4f7, #f2f4f7 5px, #e4e7ec 5px, #e4e7ec 10px);
+              color: var(--muted); font-weight: 500; display: flex; align-items: center; justify-content: center; border-radius: 5px; margin: 6px 2px; height: 28px; }
+  .tl-dimmed { opacity: .18 !important; }
+  .tl-off { position: absolute; top: 2px; right: 4px; font-size: 9.5px; font-weight: 700; line-height: 1;
+            padding: 2px 4px; border-radius: 4px; background: var(--warn-soft); color: var(--warn);
+            border: 1px solid #fedf89; z-index: 1; }
+
+  /* Workspace tabs */
+  .ws-tab {
+    padding: 10px 2px; margin-right: 20px; font-size: 13px; font-weight: 600; color: var(--muted);
+    border-bottom: 2px solid transparent; cursor: pointer; transition: color .15s ease, border-color .15s ease;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .ws-tab:hover { color: var(--ink); }
+  .ws-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  /* Team load rows: actions appear on hover */
+  .person-row .row-actions { opacity: 0; transition: opacity .12s ease; }
+  .person-row:hover .row-actions, .person-row:focus-within .row-actions { opacity: 1; }
+  @media (hover: none) { .person-row .row-actions { opacity: 1; } }
+
+  /* Inner panels, data tables, notices, loading */
+  .panel { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+  .tbl { width: 100%; font-size: 13px; }
+  .tbl th { text-align: left; font-size: 12px; font-weight: 600; color: var(--muted);
+            padding: 8px 12px 8px 0; border-bottom: 1px solid var(--line); }
+  .tbl td { padding: 10px 12px 10px 0; border-top: 1px solid #f2f4f7; vertical-align: top; }
+  .tbl tr:first-child td { border-top: 0; }
+  .note { display: flex; align-items: flex-start; gap: 8px; border: 1px solid; border-radius: 8px;
+          padding: 9px 12px; font-size: 13px; font-weight: 500; line-height: 1.45; }
+  .note::before { content: ""; width: 7px; height: 7px; border-radius: 999px; margin-top: 6px;
+                  flex-shrink: 0; background: currentColor; }
+  .note-ok   { background: var(--ok-soft);   color: var(--ok);   border-color: #abefc6; }
+  .note-warn { background: var(--warn-soft); color: var(--warn); border-color: #fedf89; }
+  .note-bad  { background: var(--bad-soft);  color: var(--bad);  border-color: #fecdca; }
+  .loading { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
+  .loading::before { content: ""; width: 14px; height: 14px; border-radius: 999px; flex-shrink: 0;
+                     border: 2px solid var(--line-strong); border-top-color: var(--accent);
+                     animation: spin .7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .loading::before { animation-duration: 2.5s; } }
+
+  table th { font-weight: 600; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #d0d5dd; border-radius: 8px; border: 2px solid var(--canvas); }
 </style>
 </head>
-<body class="px-6 py-6 max-w-6xl mx-auto">
+<body class="min-h-screen pb-16">
 
-  <header class="mb-6 pb-5 border-b border-slate-800">
-    <div class="flex items-center justify-between gap-4">
-      <div>
-        <h1 class="text-xl font-semibold tracking-tight">Squadflow</h1>
-        <p class="help mt-1">Xếp nhân sự vào dự án theo chuyên môn, lịch trống và hạn chót.</p>
+  <header class="sticky top-0 z-30 bg-white/90 backdrop-blur border-b border-[#e4e7ec]">
+    <div class="max-w-[1320px] mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-2 sm:gap-4">
+      <div class="flex items-center gap-3 min-w-0">
+        <svg class="w-8 h-8 shrink-0" viewBox="0 0 32 32" aria-hidden="true">
+          <rect width="32" height="32" rx="8" fill="#4f46e5"/>
+          <rect x="7" y="9" width="12" height="4" rx="2" fill="#fff"/>
+          <rect x="11" y="15" width="14" height="4" rx="2" fill="#c7d2fe"/>
+          <rect x="7" y="21" width="9" height="4" rx="2" fill="#fff"/>
+        </svg>
+        <div class="min-w-0">
+          <div class="text-[15px] font-semibold tracking-tight text-[#101828] leading-tight">Squadflow</div>
+          <div class="hidden sm:block text-xs text-[#667085] truncate">Staffing planner · CP-SAT optimizer</div>
+        </div>
       </div>
-      <div class="flex gap-2 shrink-0">
-        <button id="btnAssign" class="btn btn-primary">Chạy phân công</button>
-        <button id="btnReset" class="btn btn-ghost">Đặt lại</button>
+      <div class="flex items-center gap-2 shrink-0">
+        <span id="todayBadge" class="hidden md:inline-flex items-center gap-1.5 text-xs font-medium text-[#475467] mr-2"></span>
+        <button id="btnReset" class="btn btn-text" title="Restore the sample team and projects">Reset</button>
+        <button id="btnReoptimize" class="btn btn-ghost" title="Re-solve everything from scratch and review a before/after table before approving">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+          <span class="hidden sm:inline">Re-optimize</span>
+        </button>
+        <button id="btnAssign" class="btn btn-primary" title="Show the approved plan and staff any new projects that have no squad yet">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
+          <span class="hidden sm:inline">Run assignment</span><span class="sm:hidden">Run</span>
+        </button>
       </div>
     </div>
   </header>
 
-  <div class="card mb-4">
-    <div class="flex items-baseline justify-between mb-3">
-      <span class="section-title">Tài liệu dự án</span>
-      <span class="help">AI chia việc → solver xếp người theo sức chứa → bạn duyệt hai bước</span>
-    </div>
-    <textarea id="docInput" rows="7" placeholder="Dán spec, PRD hoặc email khách. Ví dụ: Nền tảng thanh toán gồm (1) cổng thanh toán trước 27/11 cần PM 4, engineer 4, QA 3 trong 4 tuần; (2) API v2 phụ thuộc cổng, engineer 4 + QA 3, 6 tuần, hạn 11/12; (3) dashboard nội bộ engineer 2 + analyst 2, ưu tiên thấp." class="bg-slate-800/80 border border-slate-700 rounded-lg px-3 py-2 w-full text-sm outline-none focus:border-indigo-500"></textarea>
-    <div class="flex flex-wrap items-center gap-3 mt-3">
-      <label class="help cursor-pointer">
-        <input id="docFile" type="file" accept=".txt,.md,.text,text/plain" class="hidden" onchange="loadDocFile(this)">
-        <span class="icon-btn inline-block">Mở file .txt / .md</span>
-      </label>
-      <button onclick="doDecompose()" class="btn btn-primary">Chia việc từ tài liệu</button>
-      <span class="help" id="docStepLabel">Bước 1 / 2</span>
-    </div>
-    <div id="docWizard" class="mt-4"></div>
-  </div>
+  <main class="max-w-[1320px] mx-auto px-4 sm:px-6 pt-6 space-y-6">
 
-  <div class="card mb-4">
-    <div class="flex items-baseline justify-between mb-3">
-      <span class="section-title">Câu hỏi nhanh</span>
-      <span class="help">Brief ngắn hoặc what-if: nếu Ivy nghỉ 2 ngày thì sao</span>
-    </div>
-    <div class="flex gap-2">
-      <textarea id="briefInput" rows="2" placeholder="Khách ABC cần nâng cấp cổng thanh toán trước 15/12, 2 engineer senior và 1 QA — hoặc: nếu Ivy nghỉ 2 tuần thì sao?" class="bg-slate-800/80 border border-slate-700 rounded-lg px-3 py-2 flex-1 text-sm outline-none focus:border-indigo-500"></textarea>
-      <button onclick="doIntake()" class="btn btn-primary self-start">Trích xuất</button>
-    </div>
-    <div id="intakeResult" class="mt-2"></div>
-  </div>
+    <div id="formErrors" class="space-y-2"></div>
 
-  <div id="whatifBox" class="mb-4"></div>
-  <div id="formErrors" class="mb-4"></div>
-  <div id="alerts" class="mb-4 space-y-2"></div>
-  <div id="suggestBox" class="mb-4"></div>
+    <section id="kpiStrip" class="grid grid-cols-2 lg:grid-cols-4 gap-4"></section>
 
-  <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
-    <div class="lg:col-span-2 card">
-      <div class="flex items-baseline justify-between mb-3">
-        <span class="section-title">Lịch theo tuần</span>
-        <span class="help">Hàng: người · cột: tuần · ô xám: nghỉ phép</span>
+    <section class="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
+      <div class="xl:col-span-5 card">
+        <div class="card-head">
+          <div>
+            <div class="card-title">Plan health</div>
+            <div class="card-sub">Late work, unstaffed projects and the skills holding them back</div>
+          </div>
+        </div>
+        <div id="alerts"></div>
       </div>
-      <div id="legend" class="flex flex-wrap gap-3 mb-3"></div>
+      <div class="xl:col-span-7" id="suggestBox"></div>
+    </section>
+
+    <!-- Plan changes: one tool at a time -->
+    <section class="card !p-0 overflow-hidden">
+      <div class="px-5 pt-4 flex flex-wrap items-end justify-between gap-3 border-b border-[#e4e7ec]">
+        <div>
+          <div class="card-title">Plan changes</div>
+          <div class="card-sub mb-1">Ask a what-if, import a client document, or edit the situation directly. Every change is previewed before it is saved.</div>
+          <div class="flex flex-wrap" role="tablist">
+            <button type="button" id="tabBtn_intake" onclick="switchStudioTab('intake')" class="ws-tab active">Ask / what-if</button>
+            <button type="button" id="tabBtn_doc" onclick="switchStudioTab('doc')" class="ws-tab">Import document</button>
+            <button type="button" id="tabBtn_controls" onclick="switchStudioTab('controls')" class="ws-tab">Manual changes</button>
+          </div>
+        </div>
+        <button type="button" id="studioToggleBtn" onclick="toggleStudioCollapse()" class="link-btn mb-3">Hide</button>
+      </div>
+
+      <div id="studioBody" class="p-5">
+        <div id="panel_intake">
+          <div class="flex flex-col sm:flex-row gap-3">
+            <textarea id="briefInput" rows="2" placeholder="e.g. “What if Ivy is off for 2 weeks?” — or describe a new project: “Client ABC needs a payment gateway upgrade by 15/12, 2 senior engineers and 1 QA”" class="px-3.5 py-2.5 flex-1 text-sm"></textarea>
+            <button onclick="doIntake()" class="btn btn-primary self-start shrink-0">Analyze</button>
+          </div>
+          <div id="intakeResult" class="mt-3"></div>
+        </div>
+
+        <div id="panel_doc" class="hidden">
+          <textarea id="docInput" rows="4" placeholder="Paste a spec, PRD or client email. E.g.: Payments platform with (1) a payment gateway by 27/11 needing PM 4, engineer 4, QA 3 for 4 weeks; (2) API v2 depending on the gateway, engineer 4 + QA 3, 6 weeks, due 11/12; (3) internal dashboard, engineer 2 + analyst 2, low priority." class="px-3.5 py-2.5 w-full text-sm"></textarea>
+          <div class="flex flex-wrap items-center justify-between gap-3 mt-3">
+            <div class="flex flex-wrap items-center gap-2">
+              <button onclick="doDecompose()" class="btn btn-primary">Split into work packages</button>
+              <label class="cursor-pointer">
+                <input id="docFile" type="file" accept=".txt,.md,.text,text/plain" class="hidden" onchange="loadDocFile(this)">
+                <span class="btn btn-ghost">Open .txt / .md</span>
+              </label>
+            </div>
+            <span class="chip pill-mute" id="docStepLabel">Step 1 / 2</span>
+          </div>
+          <p class="help mt-2">AI splits the document → the solver staffs it within capacity → you approve in two steps.</p>
+          <div id="docWizard" class="mt-3"></div>
+        </div>
+
+        <div id="panel_controls" class="hidden">
+          <div id="controls" class="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm"></div>
+        </div>
+      </div>
+    </section>
+
+    <div id="whatifBox"></div>
+
+    <section class="card">
+      <div class="card-head">
+        <div>
+          <div class="card-title">Weekly allocation</div>
+          <div class="card-sub">Hover a project to highlight its squad · striped cells are leave · the highlighted column is this week</div>
+        </div>
+      </div>
+      <div id="legend" class="flex flex-wrap gap-x-4 gap-y-2 mb-4"></div>
       <div id="timeline" class="overflow-x-auto"></div>
-    </div>
-    <div class="card">
-      <div class="flex items-baseline justify-between mb-3">
-        <span class="section-title">Tải lượng</span>
-        <span class="help">Sửa · xóa · ghim</span>
-      </div>
-      <div id="utilization" class="space-y-4"></div>
-    </div>
-  </div>
+    </section>
 
-  <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4">
-    <div class="card">
-      <span class="section-title">Phân công</span>
-      <div id="assignments" class="mt-3"></div>
-    </div>
-    <div class="card">
-      <div class="flex items-center justify-between mb-2">
-        <span class="section-title">Lý do phân công</span>
-        <button onclick="doExplain()" class="icon-btn">Giải thích bằng AI</button>
+    <section class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+      <div class="lg:col-span-8 card">
+        <div class="card-head">
+          <div>
+            <div class="card-title">Project assignments</div>
+            <div class="card-sub">Expected finish against the deadline, and who is on each squad</div>
+          </div>
+        </div>
+        <div id="assignments" class="overflow-x-auto"></div>
       </div>
-      <p class="help mb-2">Lấy từ log solver, không suy diễn thêm.</p>
-      <div id="aiExplain" class="mb-2"></div>
-      <div id="explanations" class="text-sm space-y-2 max-h-72 overflow-y-auto"></div>
-    </div>
-  </div>
+      <div class="lg:col-span-4 card">
+        <div class="card-head">
+          <div>
+            <div class="card-title">Team load</div>
+            <div class="card-sub">Share of working weeks booked while there is work · hover to edit</div>
+          </div>
+        </div>
+        <div id="utilization" class="divide-y divide-[#f2f4f7]"></div>
+      </div>
+    </section>
 
-  <div class="card mt-4">
-    <span class="section-title">Thay đổi tình huống</span>
-    <p class="help mt-1 mb-3">Áp dụng xong bảng tính lại. Ô chọn giữ giá trị vừa dùng.</p>
-    <div id="controls" class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm"></div>
-  </div>
+    <section class="card">
+      <div class="card-head">
+        <div>
+          <div class="card-title">Why each person was picked</div>
+          <div class="card-sub">Straight from the solver's decision log — the AI summary only rephrases these facts</div>
+        </div>
+        <button onclick="doExplain()" class="btn btn-ghost">Summarize with AI</button>
+      </div>
+      <div id="aiExplain" class="mb-3"></div>
+      <div id="explanations" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 text-sm"></div>
+    </section>
+
+  </main>
 
 <script>
-const PALETTE = ['#6366f1','#22c55e','#f59e0b','#ef4444','#06b6d4','#a855f7','#ec4899','#84cc16','#f97316','#14b8a6'];
+const PALETTE = ['#4f46e5','#059669','#d97706','#e11d48','#0284c7','#7c3aed','#db2777','#65a30d','#ea580c','#0d9488'];
 let DATA = null;
 let FORM = {};
 let PENDING = null;
 let PENDING_WHATIF = null;
+let STUDIO_COLLAPSED = false;
+const HIRE_LEAD_WEEKS = 6;   // same default as models.HIRE_LEAD_WEEKS
+const ROLE_INPUTS = ['njReq','njCnt','njEff','njFrom','njTo'];
 const $ = id => document.getElementById(id);
+
+function switchStudioTab(tab){
+  if(STUDIO_COLLAPSED) toggleStudioCollapse(false);
+  ['intake','doc','controls'].forEach(t=>{
+    const btn=$('tabBtn_'+t); if(btn) btn.classList.toggle('active', t===tab);
+    const pane=$('panel_'+t); if(pane) pane.classList.toggle('hidden', t!==tab);
+  });
+}
+
+function toggleStudioCollapse(force){
+  STUDIO_COLLAPSED = typeof force==='boolean' ? force : !STUDIO_COLLAPSED;
+  const body=$('studioBody');
+  const btn=$('studioToggleBtn');
+  if(body) body.classList.toggle('hidden', STUDIO_COLLAPSED);
+  if(btn) btn.textContent = STUDIO_COLLAPSED ? 'Show' : 'Hide';
+}
+
+// 'Oct 19' from an ISO date
+
+function roleBadge(role){
+  const r=String(role||'').toLowerCase();
+  const cls = r==='pm' ? 'role-pm' : r==='analyst' ? 'role-analyst' : r==='engineer' ? 'role-engineer' : r==='qa' ? 'role-qa' : 'bg-[#f2f4f7] text-[#344054]';
+  return `<span class="role-badge ${cls}">${esc(role)}</span>`;
+}
+
 function md(s){
   return esc(String(s))
-    .replace(/^#{1,6}\s+(.+)$/gm,'<div class="font-semibold mt-1">$1</div>')
-    .replace(/\*\*(.+?)\*\*/g,'<b>$1</b>')
+    .replace(/^#{1,6}\s+(.+)$/gm,'<div class="font-semibold text-[#101828] mt-1.5">$1</div>')
+    .replace(/\*\*(.+?)\*\*/g,'<b class="text-[#101828]">$1</b>')
     .replace(/^\s*[-*]\s+(.+)$/gm,'<div class="ml-2">• $1</div>')
     .replace(/\n/g,'<br>');
 }
@@ -135,60 +393,84 @@ const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':
 async function post(url, body) {
   const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: body ? JSON.stringify(body) : '{}'});
   let data = {};
-  try { data = await r.json(); } catch(e){ data = {error: 'máy chủ trả về dữ liệu không đọc được'}; }
+  try { data = await r.json(); } catch(e){ data = {error: 'the server returned unreadable data'}; }
   data._status = r.status;
   return data;
 }
 function showErrors(errs){
   const list = Array.isArray(errs) ? errs : [errs];
   $('formErrors').innerHTML = list.map(e =>
-    `<div class="border-l-2 border-rose-500 bg-rose-500/10 rounded-r-lg px-3 py-2 text-sm text-rose-200">${esc(e)}</div>`
+    `<div class="note note-bad">${esc(e)}</div>`
   ).join('');
 }
 function clearErrors(){ $('formErrors').innerHTML=''; }
 
 function snapForm(){
-  const ids=['cLeaveP','cLeaveFrom','cLeaveTo','cSlipP','cSlipDate','npName','npRole','npSkills','npCap','njName','njDur','njDead','njPrio'];
+  const ids=['cLeaveP','cLeaveFrom','cLeaveTo','cSlipP','cSlipDate','npName','npRole','npSkills','npCap','npStart','njName','njDur','njDead','njPrio','njMethod','njUat','njLive'];
   ids.forEach(id=>{ const el=$(id); if(el) FORM[id]=el.value; });
-  document.querySelectorAll('.njReq').forEach(s=>{ FORM['req_'+s.dataset.role]=s.value; });
-  document.querySelectorAll('.njCnt').forEach(s=>{ FORM['cnt_'+s.dataset.role]=s.value; });
+  ROLE_INPUTS.forEach(c=>document.querySelectorAll('.'+c).forEach(s=>{ FORM[c+'_'+s.dataset.role]=s.value; }));
 }
 function restoreForm(){
   const set = (id, v) => { const el=$(id); if(!el || v==null) return; el.value=v; };
   Object.entries(FORM).forEach(([k,v])=>{
-    if(k.startsWith('req_')){
-      const el=document.querySelector(`.njReq[data-role="${k.slice(4)}"]`);
-      if(el) el.value=v;
-    } else if(k.startsWith('cnt_')){
-      const el=document.querySelector(`.njCnt[data-role="${k.slice(4)}"]`);
+    const [c,role]=k.split('_');
+    if(ROLE_INPUTS.includes(c)){
+      const el=document.querySelector(`.${c}[data-role="${role}"]`);
       if(el) el.value=v;
     } else set(k,v);
   });
 }
 
-async function assign(){ clearErrors(); const d=await post('/api/assign'); if(d.error){ showErrors(d.error); return; } render(d); }
+// bumped by Reset: a response to anything started before it is stale and must not draw
+let PLAN_GEN=0;
+let SERVER_GEN=null;   // the server's plan generation this page is showing (see /api/reset)
+async function assign(){
+  const gen=PLAN_GEN;
+  clearErrors(); const d=await post('/api/assign');
+  if(gen!==PLAN_GEN) return;
+  if(d.error){ showErrors(d.error); return; } render(d);
+}
 async function replan(c){
+  const gen=PLAN_GEN;
   snapForm();
   clearErrors();
-  const d=await post('/api/replan', c);
+  const r=await post('/api/replan', {...c, base_gen:SERVER_GEN});
+  if(gen!==PLAN_GEN) return {error:'superseded by Reset'};
+  if(r.error){ showErrors(r.error); return r; }
+  // single source of truth: re-read the saved plan and draw once from it
+  const d=await post('/api/assign');
+  if(gen!==PLAN_GEN) return {error:'superseded by Reset'};
   if(d.error){ showErrors(d.error); return d; }
   render(d);
   restoreForm();
+  if((r.notes||[]).length) $('whatifBox').innerHTML=r.notes.map(n=>`<div class="note note-warn">${esc(n)}</div>`).join('');
   return d;
 }
 async function reset(){
-  FORM={}; PENDING=null; PENDING_WHATIF=null; DOC_TASKS=[]; DOC_STAFF=null;
+  const gen=++PLAN_GEN;
+  const btn=$('btnReset'); btn.disabled=true; btn.textContent='Resetting…';
+  FORM={}; PENDING=null; PENDING_WHATIF=null; WHATIF_OPTS=null; DOC_TASKS=[]; DOC_STAFF=null; stopDocWait();
   $('intakeResult').innerHTML=''; $('briefInput').value=''; $('whatifBox').innerHTML='';
   if($('docWizard')) $('docWizard').innerHTML='';
   if($('docInput')) $('docInput').value='';
-  if($('docStepLabel')) $('docStepLabel').textContent='Bước 1 / 2';
+  if($('docStepLabel')) $('docStepLabel').textContent='Step 1 / 2';
   clearErrors();
-  const d=await post('/api/reset');
-  if(d.error){ showErrors(d.error); return; }
-  render(d);
+  try{
+    const r=await post('/api/reset');
+    if(r.error){ showErrors(r.error); return; }
+    // read back once more: a change that reached the server just before the reset is gone too
+    const d=await post('/api/assign');
+    if(gen===PLAN_GEN) render(d.error?r:d);
+  } finally { btn.disabled=false; btn.textContent='Reset'; }
 }
 
-function color(id){let h=0;for(const c of id)h=(h*31+c.charCodeAt(0))>>>0;return PALETTE[h%PALETTE.length];}
+// by position in the plan: the palette first, then golden-angle hues so no two
+// projects share a colour; hash only for ids the plan does not know
+function color(id){
+  const i=DATA?DATA.projects.findIndex(p=>p.id===id):-1;
+  if(i>=0) return i<PALETTE.length ? PALETTE[i] : `hsl(${Math.round((i*137.508)%360)} 62% 42%)`;
+  let h=0;for(const c of id)h=(h*31+c.charCodeAt(0))>>>0;return PALETTE[h%PALETTE.length];
+}
 function pname(id){const p=DATA.projects.find(x=>x.id===id);return p?p.name:id;}
 function pshort(id){
   const n=pname(id);
@@ -198,73 +480,212 @@ function pshort(id){
   return n.slice(0,7)+'…';
 }
 
+function highlightProject(pid){
+  document.querySelectorAll('[data-proj-cell]').forEach(el=>{
+    if(!pid){ el.classList.remove('tl-dimmed'); return; }
+    const projs=(el.dataset.projCell||'').split(',');
+    el.classList.toggle('tl-dimmed', !projs.includes(pid));
+  });
+}
+
 function render(d){
   DATA=d;
+  if(d.gen!=null) SERVER_GEN=d.gen;
   $('aiExplain').innerHTML='';
+  if($('todayBadge') && d.today){
+    $('todayBadge').innerHTML=`<span class="dot" style="background:#17b26a"></span>Plan as of <b class="text-[#101828] font-semibold">${fmtD(d.today)}, ${d.today.slice(0,4)}</b>`;
+  }
+  renderKPIs(d);
   renderAlerts(d); renderLegend(d); renderTimeline(d); renderUtilization(d);
   renderAssignments(d); renderExplanations(d); renderControls(d);
   fetchSuggest(d);
 }
 
-function renderAlerts(d){
-  const bits=[];
-  for(const b of d.bottlenecks||[])
-    bits.push(`<div class="border-l-2 border-rose-500 bg-rose-500/10 rounded-r-lg px-3 py-2 text-sm"><b>Nút thắt ${esc(b.role)} ≥ ${b.level}</b>${b.detail?` — ${esc(b.detail)}`:''}</div>`);
-  for(const u of d.unstaffable||[])
-    bits.push(`<div class="border-l-2 border-amber-400 bg-amber-500/10 rounded-r-lg px-3 py-2 text-sm">Dự án <b>“${esc(u.name)}”</b> không xếp được: ${esc(u.reason)}.</div>`);
+function fmtD(iso){
+  if(!iso) return '—';
+  return new Date(iso+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'});
+}
+
+function renderKPIs(d){
+  const box=$('kpiStrip');
+  if(!box) return;
+  const total=(d.projects||[]).length;
+  const staffed=(d.assignments||[]).length;
+  const unstaffed=(d.unstaffable||[]).length;
   const late=(d.risks||[]).filter(r=>r.risk==='late');
-  if(late.length)
-    bits.push(`<div class="border-l-2 border-rose-500 bg-rose-500/10 rounded-r-lg px-3 py-2 text-sm"><b>${late.length} dự án trễ hạn:</b> ${late.map(r=>esc(r.name)+(r.days_left!=null?` (${-r.days_left} ngày)`:'')).join(', ')}.</div>`);
-  if(!bits.length) bits.push(`<div class="border-l-2 border-emerald-500 bg-emerald-500/10 rounded-r-lg px-3 py-2 text-sm">Mọi dự án đều xếp được nhân sự, đúng hạn.</div>`);
-  $('alerts').innerHTML=bits.join('');
+  const tight=(d.risks||[]).filter(r=>r.risk==='tight');
+  const lateDays=late.reduce((s,r)=>s+lateOf(r),0);
+  const util=d.utilization||[];
+  const avg=util.length?Math.round(util.reduce((s,u)=>s+(u.util||0),0)/util.length*100):0;
+  const active=Math.max(0,...util.map(u=>u.available||0));
+  const full=util.filter(u=>u.util>=0.9).map(u=>u.name);
+  const idle=util.filter(u=>u.idle).length;
+  const bn=(d.bottlenecks||[]).length;
+  const tile=(dot,label,value,foot,cls='')=>`<div class="card kpi">
+      <div class="kpi-label"><span class="dot" style="background:${dot}"></span>${label}</div>
+      <div class="kpi-value ${cls}">${value}</div>
+      <div class="kpi-foot">${foot}</div>
+    </div>`;
+  box.innerHTML=[
+    tile(unstaffed?'#f79009':'#17b26a','Projects staffed',
+      `${staffed}<span class="text-lg font-medium text-[#98a2b3]"> / ${total}</span>`,
+      unstaffed?`${unstaffed} could not be staffed`:'Every project has a squad'),
+    tile(late.length?'#f04438':'#17b26a','Deadlines',
+      late.length?`${late.length} late`:'On time',
+      (late.length?`${lateDays} late days in total`:`${staffed} on time`)+(tight.length?` · ${tight.length} tight`:''),
+      late.length?'text-[#b42318]':''),
+    tile('#4f46e5','Average team load',`${avg}%`,
+      `${util.length} people · ${active} active weeks${idle?` · ${idle} idle`:''}`),
+    tile(bn?'#f79009':'#17b26a','Skill bottlenecks',bn,
+      full.length?`Fully booked: ${esc(full.join(', '))}`:(bn?'See plan health':'No skill shortage')),
+  ].join('');
+}
+
+// days late by the worst of deadline and stage due dates (the server's late_days)
+function lateOf(r){
+  if(!r||r.risk!=='late') return 0;
+  if(r.late_days!=null) return r.late_days;
+  return Math.max(0,-(r.days_left||0),...(r.milestones||[]).map(m=>-m.days_left));
+}
+function lateReason(r){
+  const ms=(r.milestones||[]).filter(m=>m.days_left<0).sort((a,b)=>a.days_left-b.days_left)[0];
+  if(ms && -ms.days_left>=Math.max(0,-(r.days_left||0)))
+    return `<b class="text-[#101828]">${esc(r.name)}</b> — ${esc(STAGE_LABEL[ms.stage]||ms.stage)} planned to end ${fmtD(ms.planned)}, ${-ms.days_left} days after its ${fmtD(ms.due)} due date`;
+  return `<b class="text-[#101828]">${esc(r.name)}</b> finishes ${fmtD(r.done_date)}, ${-r.days_left} days after its ${fmtD(r.deadline)} deadline`;
+}
+
+function renderAlerts(d){
+  const row=(pill,label,html)=>`<div class="issue">
+      <div class="issue-kind"><span class="chip ${pill}">${label}</span></div>
+      <div class="text-[13px] text-[#344054] leading-snug">${html}</div>
+    </div>`;
+  const rows=[];
+  const late=(d.risks||[]).filter(r=>r.risk==='late').sort((a,b)=>lateOf(b)-lateOf(a));
+  for(const r of late)
+    rows.push(row('pill-bad','Late',lateReason(r)));
+  for(const u of d.unstaffable||[])
+    rows.push(row('pill-warn','Unstaffed',`<b class="text-[#101828]">${esc(u.name)}</b> — ${esc(u.reason)}`));
+  for(const b of d.bottlenecks||[])
+    rows.push(row('pill-mute',`${esc(b.role)} ≥ ${b.level}`,esc(b.detail||'')));
+  $('alerts').innerHTML=rows.length?rows.join(''):
+    `<div class="flex items-center gap-2 text-[13px] text-[#067647] font-medium"><span class="dot" style="background:#17b26a"></span>Every project is staffed and on time.</div>`;
 }
 
 function renderLegend(d){
   $('legend').innerHTML=d.projects.map(p=>
-    `<span class="text-xs flex items-center gap-1.5"><span style="background:${color(p.id)}" class="inline-block w-3 h-3 rounded"></span><span>${esc(p.name)}</span></span>`).join('');
+    `<span onmouseenter="highlightProject('${p.id}')" onmouseleave="highlightProject(null)" class="text-[12.5px] text-[#344054] flex items-center gap-1.5 cursor-default">
+      <span style="background:${color(p.id)}" class="inline-block w-2.5 h-2.5 rounded-[3px]"></span>${esc(p.name)}
+    </span>`).join('');
 }
 
 function renderTimeline(d){
-  const N=d.horizon_weeks;
-  const cols=`140px repeat(${N}, minmax(44px, 1fr))`;
-  let cells=`<div class="tl tl-head">Nhân sự</div>`;
-  d.week_dates.forEach((w,i)=>cells+=`<div class="tl tl-head" title="${w}">${w.slice(5)}</div>`);
-  for(const p of d.people){
-    cells+=`<div class="tl tl-name" title="${esc(p.name)}">${esc(p.name)}<span class="text-slate-500 font-normal"> ·${p.role}</span></div>`;
-    for(let w=0;w<N;w++){
-      const projs=(d.committed[p.id]&&d.committed[p.id][String(w)])||[];
-      const onLeave=p.leave.some(([a,b])=>w>=weekOf(a)&&w<=weekOf(b));
-      let bg='transparent',label='',tip='';
-      if(onLeave){bg='#1e293b';label='nghỉ';tip='nghỉ phép';}
-      else if(projs.length){bg=color(projs[0]);label=projs.map(pshort).join('/');tip=projs.map(pname).join(' + ');}
-      cells+=`<div class="tl" style="background:${bg};${projs.length&&!onLeave?'opacity:.85':''}" title="${esc(tip)}">${esc(label)}</div>`;
+  // Only the weeks that carry work or a deadline, not the solver's padded horizon.
+  const lastEnd=Math.max(0,...(d.assignments||[]).map(a=>a.end_week));
+  const lastDl=Math.max(0,...(d.projects||[]).map(p=>weekOf(p.deadline)+1));
+  const N=Math.max(1,Math.min(d.horizon_weeks,Math.max(lastEnd,lastDl,8)+1));
+  const cols=`168px repeat(${N}, minmax(54px, 1fr))`;
+  let cells=`<div class="tl tl-head !justify-start pl-3 sticky left-0 z-[3]">Person</div>`;
+  for(let w=0;w<N;w++)
+    cells+=`<div class="tl tl-head ${w===0?'now':''}" title="Week ${w}: ${d.week_dates[w]}">${w===0?'This wk':fmtD(d.week_dates[w])}</div>`;
+  // effort[person][project][week] = % of the role they hold there that week
+  const effort={};
+  for(const a of d.assignments||[]){
+    const req=(d.projects.find(x=>x.id===a.project_id)||{}).required||{};
+    const dur=(d.projects.find(x=>x.id===a.project_id)||{}).duration_weeks||1;
+    for(const [role,pids] of Object.entries(a.squad||{})){
+      const spec=req[role]||{};
+      const phases=(spec.phases||[]).length?spec.phases
+        :[{start:spec.start||0, weeks:spec.weeks!=null?spec.weeks:dur-(spec.start||0), effort:spec.effort||100}];
+      for(const pid of pids){
+        const byWeek=((effort[pid]=effort[pid]||{})[a.project_id]={});
+        for(const ph of phases) for(let w=ph.start; w<ph.start+ph.weeks; w++) byWeek[a.start_week+w]=ph.effort;
+      }
     }
   }
-  $('timeline').innerHTML=`<div class="grid" style="grid-template-columns:${cols}">${cells}</div>`;
+  for(const p of d.people){
+    cells+=`<div class="tl tl-name" title="${esc(p.name)} (${p.role})"><span class="truncate font-medium">${esc(p.name)}</span>${roleBadge(p.role)}</div>`;
+    const key=w=>{
+      if(p.available_from && weekOf(p.available_from)>w) return '#pre';
+      const off=leaveDays(p,w);
+      if(off>=5) return '#leave';
+      // effort is part of the key so a stage change (e.g. QA 20% → 100%) starts a new bar
+      const k=[...((d.committed[p.id]&&d.committed[p.id][String(w)])||[])].sort()
+        .map(pid=>`${pid}@${((effort[p.id]||{})[pid]||{})[w]||100}`).join(',');
+      return off ? `${k}|${off}` : k;   // a short leave splits the span so it can be marked
+    };
+    let w=0;
+    while(w<N){
+      const k=key(w);
+      if(!k){ cells+=`<div class="tl ${w===0?'tl-cell now':''}"></div>`; w++; continue; }
+      let span=1;
+      while(w+span<N && key(w+span)===k) span++;
+      if(k==='#leave' || k==='#pre'){
+        const label=k==='#pre'?`Starts ${fmtD(p.available_from)}`:'On leave';
+        cells+=`<div class="tl" style="grid-column:span ${span}"><div class="tl-leave w-full">${label}</div></div>`;
+      } else {
+        const [projs,off]=k.split('|');
+        const bars=(projs?projs.split(','):[]).map(item=>{
+          const [pid,eff]=item.split('@'); const e=+eff||100;
+          const lbl=esc(pname(pid))+(e<100?` · ${e}%`:'');
+          return `<div class="tl-bar" data-proj-cell="${pid}" style="--c:${color(pid)}" title="${lbl}" onmouseenter="highlightProject('${pid}')" onmouseleave="highlightProject(null)"><span class="truncate">${lbl}</span></div>`;
+        }).join('');
+        const mark=off?`<div class="tl-off" title="${off} day${off>1?'s':''} off this week — someone covers">${off}d off</div>`:'';
+        cells+=`<div class="tl tl-cell relative" style="grid-column:span ${span}">${bars}${mark}</div>`;
+      }
+      w+=span;
+    }
+  }
+  $('timeline').innerHTML=`<div class="tl-grid grid" style="grid-template-columns:${cols}">${cells}</div>`;
 }
 
 function weekOf(iso){const s=new Date(DATA.today+'T00:00:00');return Math.floor((new Date(iso+'T00:00:00')-s)/(7*86400000));}
+// weekdays of plan week w that fall inside any of p's leave ranges
+function leaveDays(p,w){
+  const mon=new Date(DATA.today+'T00:00:00'); mon.setDate(mon.getDate()+7*w);
+  let n=0;
+  for(let i=0;i<7;i++){
+    const day=new Date(mon); day.setDate(mon.getDate()+i);
+    if(day.getDay()===0||day.getDay()===6) continue;
+    const iso=day.toISOString().slice(0,10);
+    if((p.leave||[]).some(([a,b])=>iso>=a&&iso<=b)) n++;
+  }
+  return n;
+}
 
 function renderUtilization(d){
   const pins=d.pins||[];
-  $('utilization').innerHTML=d.utilization.map(u=>{
+  $('utilization').innerHTML=[...d.utilization].sort((a,b)=>b.util-a.util).map(u=>{
     const pct=Math.round(u.util*100);
-    const c=u.overloaded?'#ef4444':u.idle?'#64748b':'#22c55e';
-    const state=u.overloaded?'<span class="chip bg-rose-500/20 text-rose-300">QUÁ TẢI</span>'
-              :u.idle?'<span class="chip bg-slate-600/30 text-slate-400">RẢNH</span>':'';
+    const c=u.overloaded?'#f04438':pct>=90?'#f79009':u.idle?'#98a2b3':'#4f46e5';
+    const state=u.overloaded?'<span class="chip pill-bad">Overloaded</span>'
+              :pct>=90?'<span class="chip pill-warn">Full</span>'
+              :u.idle?'<span class="chip pill-mute">Idle</span>':'';
+    const cover=u.cover_days?`<span class="chip pill-warn" title="Days on leave during booked work that someone else must cover">${u.cover_days}d to cover</span>`:'';
+    const person=d.people.find(x=>x.id===u.id)||{};
+    const skills=Object.entries(person.skills||{}).map(([k,v])=>`${k} ${v}`).join(' · ');
+    const cap=person.capacity&&person.capacity!==1?` · ${person.capacity}× full-time capacity`:'';
+    const starts=person.available_from&&person.available_from>d.today?` · starts ${fmtD(person.available_from)}`:'';
     const pinned=pins.filter(x=>x.person_id===u.id);
-    const pinNote=pinned.length?`<span class="text-slate-400 text-xs">Ghim: ${pinned.map(x=>esc(x.project_name)).join(', ')}</span>`:'';
-    return `<div>
-      <div class="flex justify-between items-center text-xs mb-1">
-        <span class="font-semibold">${esc(u.name)} <span class="text-slate-500">· ${u.role}</span> ${pinNote}</span>
-        <span class="text-slate-400">${u.booked}/${u.slots!=null?u.slots:u.available} tuần-người · <b class="${pct>100?'text-rose-400':'text-slate-300'}">${pct}%</b> ${state}</span>
+    return `<div class="person-row py-3 first:pt-0 last:pb-0">
+      <div class="flex items-start justify-between gap-2">
+        <div class="min-w-0">
+          <div class="flex items-center gap-1.5 flex-wrap"><span class="font-semibold text-[13.5px] text-[#101828]">${esc(u.name)}</span>${roleBadge(u.role)}${state}${cover}</div>
+          <div class="text-xs text-[#667085] mt-0.5 flex flex-wrap items-center gap-x-3">
+            <span>${esc(skills)}${cap}${starts}</span>
+            <span class="row-actions inline-flex gap-2.5">
+              <button class="link-btn" onclick="startEditPerson('${u.id}')">Edit</button>
+              <button class="link-btn" onclick="startPin('${u.id}')">Pin</button>
+              <button class="link-btn hover:!text-[#b42318]" onclick="doDeletePerson('${u.id}','${esc(u.name)}')">Remove</button>
+            </span>
+          </div>
+        </div>
+        <div class="text-right shrink-0">
+          <div class="font-semibold text-[13.5px] ${u.overloaded?'text-[#b42318]':'text-[#101828]'}">${pct}%</div>
+          <div class="text-[11px] text-[#98a2b3]" title="Full-time weeks booked / weeks this person can work (leave excluded)">${u.booked}/${u.slots!=null?u.slots:u.available} wk</div>
+        </div>
       </div>
-      <div class="bar bg-slate-800 mb-1"><div class="bar" style="width:${Math.min(pct,100)}%;background:${c}"></div></div>
-      <div class="flex gap-1">
-        <button class="icon-btn" onclick="startEditPerson('${u.id}')">Sửa</button>
-        <button class="icon-btn" onclick="doDeletePerson('${u.id}','${esc(u.name)}')">Xóa</button>
-        <button class="icon-btn" onclick="startPin('${u.id}')">Ghim</button>
-      </div>
+      <div class="bg-[#f2f4f7] rounded-full mt-2 overflow-hidden"><div class="bar" style="width:${Math.min(pct,100)}%;background:${c}"></div></div>
+      ${pinned.length?`<div class="text-[11.5px] text-[#4338ca] font-medium mt-1.5">Pinned to ${pinned.map(x=>esc(x.project_name)).join(', ')}</div>`:''}
       <div id="edit_${u.id}"></div>
     </div>`;
   }).join('');
@@ -273,12 +694,12 @@ function renderUtilization(d){
 function startEditPerson(id){
   const p=DATA.people.find(x=>x.id===id); if(!p) return;
   const skills=Object.entries(p.skills||{}).map(([k,v])=>k+':'+v).join(',');
-  $(`edit_${id}`).innerHTML=`<div class="mt-1 flex flex-wrap gap-1 text-xs">
-    <input id="edName_${id}" value="${esc(p.name)}" class="bg-slate-800 rounded px-1 py-0.5 w-24">
-    <input id="edSkills_${id}" value="${esc(skills)}" placeholder="engineer:5,qa:2" class="bg-slate-800 rounded px-1 py-0.5 w-36">
-    <input id="edCap_${id}" type="number" step="0.5" value="${p.capacity}" class="bg-slate-800 rounded px-1 py-0.5 w-14">
-    <button class="icon-btn" onclick="saveEditPerson('${id}')">Lưu</button>
-    <button class="icon-btn" onclick="$('edit_${id}').innerHTML=''">Hủy</button>
+  $(`edit_${id}`).innerHTML=`<div class="mt-2 pt-2 border-t border-[#e4e7ec] flex flex-wrap gap-1.5 text-xs">
+    <input id="edName_${id}" value="${esc(p.name)}" class="px-2 py-1 w-24">
+    <input id="edSkills_${id}" value="${esc(skills)}" placeholder="engineer:5,qa:2" class="px-2 py-1 w-36">
+    <input id="edCap_${id}" type="number" step="0.5" value="${p.capacity}" class="px-2 py-1 w-16">
+    <button class="icon-btn !bg-[#4f46e5] !text-white !border-[#4f46e5]" onclick="saveEditPerson('${id}')">Save</button>
+    <button class="icon-btn" onclick="$('edit_${id}').innerHTML=''">Cancel</button>
   </div>`;
 }
 function saveEditPerson(id){
@@ -289,18 +710,18 @@ function saveEditPerson(id){
   replan({update_person:{id, name, skills, capacity}});
 }
 function doDeletePerson(id, name){
-  if(!confirm(`Xóa ${name} khỏi đội?`)) return;
+  if(!confirm(`Remove ${name} from the team?`)) return;
   replan({remove_person:[id]});
 }
 function startPin(id){
   const p=DATA.people.find(x=>x.id===id); if(!p) return;
   const jOpts=DATA.projects.map(j=>`<option value="${j.id}">${esc(j.name)}</option>`).join('');
   const roleOpts=['pm','analyst','engineer','qa'].map(r=>`<option value="${r}" ${r===p.role?'selected':''}>${r}</option>`).join('');
-  $(`edit_${id}`).innerHTML=`<div class="mt-1 flex flex-wrap gap-1 text-xs">
-    <select id="pinJ_${id}" class="bg-slate-800 rounded px-1 py-0.5">${jOpts}</select>
-    <select id="pinR_${id}" class="bg-slate-800 rounded px-1 py-0.5">${roleOpts}</select>
-    <button class="icon-btn" onclick="doPin('${id}')">Ghim vào dự án</button>
-    <button class="icon-btn" onclick="$('edit_${id}').innerHTML=''">Hủy</button>
+  $(`edit_${id}`).innerHTML=`<div class="mt-2 pt-2 border-t border-[#e4e7ec] flex flex-wrap gap-1.5 text-xs">
+    <select id="pinJ_${id}" class="px-2 py-1">${jOpts}</select>
+    <select id="pinR_${id}" class="px-2 py-1">${roleOpts}</select>
+    <button class="icon-btn !bg-[#4f46e5] !text-white !border-[#4f46e5]" onclick="doPin('${id}')">Pin to project</button>
+    <button class="icon-btn" onclick="$('edit_${id}').innerHTML=''">Cancel</button>
   </div>`;
 }
 function doPin(id){
@@ -310,86 +731,132 @@ function doUnpin(jid, role, pid){
   replan({unpin:[{project_id:jid, role, person_id:pid}]});
 }
 
+const STAGE_LABEL={requirements:'Requirements',design:'Design',build:'Build',sit:'SIT',uat:'UAT',deploy:'Go-live',gate:'Sign-off'};
+const STAGE_TINT={requirements:'#c7d2fe',design:'#a5b4fc',build:'#818cf8',sit:'#fbbf24',uat:'#f59e0b',deploy:'#34d399',gate:'#e4e7ec'};
+// one thin segmented bar: each stage's share of the project, dates on hover
+function stageStrip(p,start,d){
+  if(!p||!(p.stages||[]).length) return '';
+  const segs=p.stages.map(st=>{
+    const from=d.week_dates[start+st.start], toW=start+st.start+st.weeks-1;
+    const to=d.week_dates[toW]?(()=>{const x=new Date(d.week_dates[toW]+'T00:00:00');x.setDate(x.getDate()+4);return x.toISOString().slice(0,10);})():null;
+    const label=STAGE_LABEL[st.stage]||st.stage;
+    return `<span style="flex:${st.weeks};background:${STAGE_TINT[st.stage]||'#e4e7ec'}" title="${label}${st.stage==='gate'?' (client sign-off)':''}: ${fmtD(from)} – ${fmtD(to)} · ${st.weeks} wk"></span>`;
+  }).join('');
+  return `<div class="flex h-1.5 rounded-full overflow-hidden gap-px mt-1.5 ml-[18px] max-w-[220px]" role="img" aria-label="Stages: ${p.stages.map(st=>STAGE_LABEL[st.stage]).join(', ')}">${segs}</div>`;
+}
+
+// mirrors forecast._sample_weeks / methodology.STAGE_OVERRUN
+function riskModel(p){
+  return p&&p.method==='waterfall'
+    ? 'Share of 500 simulated runs that finish after the deadline. Each stage may overrun: requirements/design up to 20%, build 30%, SIT/UAT 50%, deploy 20%, client sign-off up to 2× its wait.'
+    : 'Share of 500 simulated runs that finish after the deadline, with the whole project 0–30% longer than planned.';
+}
+
 function renderAssignments(d){
   const box=$('assignments');
   const riskById=Object.fromEntries(d.risks.map(r=>[r.project_id,r]));
   const rows=[...d.assignments].sort((a,b)=>a.start_week-b.start_week);
   const pinSet=new Set((d.pins||[]).map(x=>x.project_id+'|'+x.role+'|'+x.person_id));
+  const th='py-2.5 pr-3 text-xs font-semibold text-[#667085]';
   const parts=[];
   if(rows.length){
-    parts.push(`<table class="w-full text-sm"><thead><tr class="text-slate-500 text-left">
-      <th class="py-1">Dự án (ưu tiên)</th><th>Bắt đầu</th><th>Xong dự kiến</th><th>Hạn chót</th><th>Nhóm</th></tr></thead><tbody>`+
+    parts.push(`<table class="w-full min-w-[680px] text-[13px]"><thead><tr class="text-left border-b border-[#e4e7ec]">
+      <th class="${th}">Project</th><th class="${th}">Start</th><th class="${th}">Finish</th><th class="${th}">Deadline</th><th class="${th}">Status</th><th class="${th}">Squad</th></tr></thead><tbody class="divide-y divide-[#f2f4f7]">`+
       rows.map(a=>{
         const p=d.projects.find(x=>x.id===a.project_id);
         const r=riskById[a.project_id];
         const days=r&&r.days_left!=null?r.days_left:null;
-        const dayTxt = days==null ? '' : (days>=0
-          ? `<span class="text-slate-500">(còn ${days} ngày)</span>`
-          : `<span class="text-rose-400">(trễ ${-days} ngày)</span>`);
-        const riskBadge = r&&r.risk==='tight' ? '<span class="chip bg-amber-500/20 text-amber-300">GẤP</span>'
-                        : r&&r.risk==='late' ? '<span class="chip bg-rose-500/20 text-rose-300">TRỄ</span>' : '';
+        const chip=!r?'':r.risk==='late'?`<span class="chip pill-bad">${lateOf(r)}d late</span>`
+                    :r.risk==='tight'?`<span class="chip pill-warn">Tight · ${days}d</span>`
+                    :`<span class="chip pill-ok">${days}d buffer</span>`;
+        // Monte Carlo (forecast.py): 500 runs; overrun model depends on the method
+        const mp=(d.miss_prob||{})[a.project_id];
+        // only an early warning: a late project is 100% by definition, a safe one says nothing
+        const risk=mp==null||!r||r.risk==='late'||mp<0.05?'':`<div class="text-[11.5px] mt-1 ${mp>=0.5?'text-[#b42318] font-semibold':mp>=0.2?'text-[#b54708] font-medium':'text-[#98a2b3]'}" title="${esc(riskModel(p))}">${Math.round(mp*100)}% chance late</div>`;
+        const ms=((r&&r.milestones)||[]).map(m=>{
+          const late=m.days_left<0;
+          return `<div class="text-[11.5px] mt-1 ${late?'text-[#b42318] font-semibold':'text-[#475467]'}" title="Stage due date from the document; planned end of ${esc(STAGE_LABEL[m.stage]||m.stage)}: ${fmtD(m.planned)}">${esc(STAGE_LABEL[m.stage]||m.stage)} due ${fmtD(m.due)} · ${late?`${-m.days_left}d late`:`${m.days_left}d spare`}</div>`;
+        }).join('');
+        const status=chip+risk+ms;
+        const p80=(d.p80_finish||{})[a.project_id];
+        const req=(p&&p.required)||{};
         const squad=Object.entries(a.squad).map(([rl,pids])=>{
           const arr=Array.isArray(pids)?pids:[pids];
           return arr.map(pid=>{
             const pp=d.people.find(x=>x.id===pid);
             const pinned=pinSet.has(a.project_id+'|'+rl+'|'+pid);
             const pinBtn=pinned
-              ? `<button class="text-slate-400 underline decoration-slate-600 ml-1" title="bỏ ghim" onclick="doUnpin('${a.project_id}','${rl}','${pid}')">bỏ ghim</button>`
+              ? `<button class="text-[#4338ca] hover:text-[#b42318] font-semibold leading-none" title="Pinned — click to unpin" aria-label="Unpin" onclick="doUnpin('${a.project_id}','${rl}','${pid}')">×</button>`
               : '';
-            return `<span class="chip" style="background:${color(a.project_id)}22;color:${color(a.project_id)}">${rl}:${pp?esc(pp.name):esc(pid)} ${pinBtn}</span>`;
+            const spec=req[rl]||{};
+            const bits=[];
+            if((spec.phases||[]).length){
+              // several stage windows: first–last week and the effort range
+              const from=Math.min(...spec.phases.map(x=>x.start))+1, to=Math.max(...spec.phases.map(x=>x.start+x.weeks));
+              const effs=spec.phases.map(x=>x.effort), lo=Math.min(...effs), hi=Math.max(...effs);
+              bits.push(`wk ${from}–${to}`, lo===hi?`${lo}%`:`${lo}–${hi}%`);
+            } else {
+            if(spec.effort&&spec.effort<100) bits.push(`${spec.effort}%`);
+            if(spec.start||spec.weeks!=null){
+              const from=(spec.start||0)+1, to=(spec.start||0)+(spec.weeks!=null?spec.weeks:p.duration_weeks-(spec.start||0));
+              bits.push(from===to?`wk ${from}`:`wk ${from}–${to}`);
+            }
+            }
+            const extra=bits.length?`<span class="text-[10.5px] text-[#98a2b3]">${bits.join(' · ')}</span>`:'';
+            return `<span class="person-chip ${pinned?'!bg-[#eef2ff] !border-[#c7d2fe] !text-[#3538cd]':''}"><span class="r">${rl}</span>${pp?esc(pp.name):esc(pid)}${extra}${pinBtn}</span>`;
           }).join(' ');
         }).join(' ');
-        return `<tr class="border-t border-slate-800">
-          <td class="py-2 font-medium">${esc(a.name)} <span class="text-slate-500">(${p?p.priority:''})</span></td>
-          <td>${d.week_dates[a.start_week]?d.week_dates[a.start_week].slice(5):'—'}</td>
-          <td>${r&&r.done_date?r.done_date.slice(5):'—'} ${dayTxt}</td>
-          <td>${p?p.deadline.slice(5):'—'} ${riskBadge}</td>
-          <td>${squad}</td></tr>`;
+        return `<tr class="hover:bg-[#f9fafb] transition align-top" onmouseenter="highlightProject('${a.project_id}')" onmouseleave="highlightProject(null)">
+          <td class="py-3 pr-3">
+            <div class="flex items-center gap-2 font-medium text-[#101828]">
+              <span class="w-2.5 h-2.5 rounded-[3px] shrink-0" style="background:${color(a.project_id)}"></span>${esc(a.name)}
+            </div>
+            <div class="text-xs text-[#98a2b3] ml-[18px]">Priority ${p?p.priority:'—'} · ${p?p.duration_weeks:'?'} wk${p&&p.method==='waterfall'?' · waterfall':''}</div>
+            ${stageStrip(p,a.start_week,d)}
+          </td>
+          <td class="py-3 pr-3 text-[#344054] whitespace-nowrap">${fmtD(d.week_dates[a.start_week])}</td>
+          <td class="py-3 pr-3 text-[#344054] whitespace-nowrap">${r?fmtD(r.done_date):'—'}${p80&&r&&p80!==r.done_date?`<div class="text-[11.5px] text-[#98a2b3]" title="80% of simulated runs finish by this date">P80 ${fmtD(p80)}</div>`:''}</td>
+          <td class="py-3 pr-3 text-[#344054] whitespace-nowrap">${p?fmtD(p.deadline):'—'}</td>
+          <td class="py-3 pr-3">${status}</td>
+          <td class="py-3"><div class="flex flex-wrap gap-1">${squad}</div></td></tr>`;
       }).join('')+`</tbody></table>`);
   }
   if((d.unstaffable||[]).length){
-    parts.push(`<div class="mt-3 text-xs font-semibold text-amber-300">Không xếp được</div>`);
-    parts.push(`<table class="w-full text-sm"><tbody>`+
-      d.unstaffable.map(u=>{
-        const p=d.projects.find(x=>x.id===u.project_id);
-        return `<tr class="border-t border-slate-800">
-          <td class="py-2 font-medium">${esc(u.name)} <span class="text-slate-500">(${p?p.priority:''})</span></td>
-          <td colspan="3" class="text-amber-300 text-xs">${esc(u.reason)}</td>
-          <td></td></tr>`;
-      }).join('')+`</tbody></table>`);
+    parts.push(`<div class="mt-5 mb-2 text-xs font-semibold text-[#b54708]">Could not be staffed</div>`);
+    parts.push(`<div class="space-y-2">`+d.unstaffable.map(u=>{
+      const p=d.projects.find(x=>x.id===u.project_id);
+      return `<div class="rounded-lg border border-[#fedf89] bg-[#fffaeb] px-3 py-2 text-[13px]">
+        <span class="font-medium text-[#101828]">${esc(u.name)}</span><span class="text-[#98a2b3]"> · priority ${p?p.priority:'—'}</span>
+        <div class="text-[#b54708] text-xs mt-0.5">${esc(u.reason)}</div></div>`;
+    }).join('')+`</div>`);
   }
-  if(!parts.length){ box.innerHTML='<p class="help">Chưa có dự án nào được phân công.</p>'; return; }
+  if(!parts.length){ box.innerHTML='<p class="help">No projects assigned yet.</p>'; return; }
   box.innerHTML=parts.join('');
 }
 
 function decisionText(x){
-  if(x.overloaded) return `${esc(x.person_name)} (${x.role} ${x.chosen_level}) — <b class="text-rose-400">QUÁ TẢI</b>: không còn ai đủ ${x.role}≥${x.min_level} trống lịch`;
-  if(x.n_eligible===1) return `${esc(x.person_name)} (${x.role} ${x.chosen_level}) — người duy nhất đủ ${x.role}≥${x.min_level}`;
-  if(x.least_qualified) return `${esc(x.person_name)} (${x.role} ${x.chosen_level}) — đủ chuẩn, chọn ít kinh nghiệm nhất trong ${x.n_eligible} người (dành senior cho việc khó)`;
-  if(x.solver==='cp_sat') return `${esc(x.person_name)} (${x.role} ${x.chosen_level}) — đủ ${x.role}≥${x.min_level}, chọn bởi tối ưu toàn cục trong ${x.n_eligible} người (cân tải / giữ phân công cũ / hạn chót)`;
-  return `${esc(x.person_name)} (${x.role} ${x.chosen_level}) — đủ chuẩn, chọn ít kinh nghiệm nhất trong ${x.n_eligible} người (dành senior cho việc khó)`;
+  if(x.overloaded) return `<b class="text-[#101828]">${esc(x.person_name)}</b> (${x.role} ${x.chosen_level}) — <b class="text-rose-600">OVERLOADED</b>: nobody else with ${x.role}≥${x.min_level} is free`;
+  if(x.n_eligible===1) return `<b class="text-[#101828]">${esc(x.person_name)}</b> (${x.role} ${x.chosen_level}) — the only person with ${x.role}≥${x.min_level}`;
+  if(x.least_qualified) return `<b class="text-[#101828]">${esc(x.person_name)}</b> (${x.role} ${x.chosen_level}) — qualified; least senior of ${x.n_eligible} candidates (seniors kept for harder work)`;
+  if(x.solver==='cp_sat') return `<b class="text-[#101828]">${esc(x.person_name)}</b> (${x.role} ${x.chosen_level}) — has ${x.role}≥${x.min_level}; picked by the global optimizer among ${x.n_eligible} candidates (load balance / keep previous squad / deadlines)`;
+  return `<b class="text-[#101828]">${esc(x.person_name)}</b> (${x.role} ${x.chosen_level}) — qualified; least senior of ${x.n_eligible} candidates (seniors kept for harder work)`;
 }
 
 function renderExplanations(d){
   const byProj={};
   d.decisions.forEach(x=>{(byProj[x.project_id]=byProj[x.project_id]||[]).push(x);});
   const html=[];
-  const late=(d.risks||[]).filter(r=>r.risk==='late');
-  if(late.length){
-    html.push(`<div class="border-t border-slate-800 pt-2"><div class="font-semibold text-rose-300">Dự án TRỄ hạn</div>`);
-    for(const r of late){
-      const days=r.days_left==null?'' : ` — trễ ${-r.days_left} ngày`;
-      html.push(`<div class="text-xs text-rose-300/90 ml-2">• ${esc(r.name)}${days}</div>`);
-    }
-    html.push(`</div>`);
-  }
   for(const a of [...d.assignments].sort((x,y)=>x.start_week-y.start_week)){
-    html.push(`<div class="border-t border-slate-800 pt-2"><div class="font-semibold">${esc(a.name)} <span class="text-slate-500 text-xs">(tuần ${a.start_week})</span></div>`);
-    for(const x of byProj[a.project_id]||[]) html.push(`<div class="text-xs text-slate-400 ml-2">• ${decisionText(x)}</div>`);
+    html.push(`<div class="card-subtle !p-3.5">
+      <div class="flex items-center justify-between gap-2 mb-1.5">
+        <span class="flex items-center gap-2 font-semibold text-[#101828]"><span class="w-2.5 h-2.5 rounded-[3px]" style="background:${color(a.project_id)}"></span>${esc(a.name)}</span>
+        <span class="text-xs text-[#667085] whitespace-nowrap">starts ${fmtD(d.week_dates[a.start_week])}</span>
+      </div>`);
+    for(const x of byProj[a.project_id]||[]) html.push(`<div class="text-xs text-[#475467] mt-1 leading-relaxed">${decisionText(x)}</div>`);
     html.push(`</div>`);
   }
-  for(const u of d.unstaffable) html.push(`<div class="border-t border-slate-800 pt-2"><div class="font-semibold text-amber-300">${esc(u.name)}</div><div class="text-xs text-slate-400 ml-2">• Không xếp được: ${esc(u.reason)}</div></div>`);
-  $('explanations').innerHTML=html.join('')||'<p class="help">Chưa có dữ liệu.</p>';
+  for(const u of d.unstaffable) html.push(`<div class="rounded-lg border border-[#fedf89] bg-[#fffaeb] p-3.5"><div class="font-semibold text-[#101828]">${esc(u.name)}</div><div class="text-xs text-[#b54708] mt-1">Unstaffable: ${esc(u.reason)}</div></div>`);
+  $('explanations').innerHTML=html.join('')||'<p class="help">No data yet.</p>';
 }
 
 function renderControls(d){
@@ -398,55 +865,98 @@ function renderControls(d){
   const roleOpts='<option value="pm">PM</option><option value="analyst">Analyst</option><option value="engineer">Engineer</option><option value="qa">QA</option>';
   const lvlOpts=[1,2,3,4,5].map(n=>`<option value="${n}">${n}</option>`).join('');
   const minDay=d.today;
+  const hireDay=new Date(d.today+'T00:00:00'); hireDay.setDate(hireDay.getDate()+7*HIRE_LEAD_WEEKS);
+  const hireIso=hireDay.toISOString().slice(0,10);
+  const roleRow=r=>`<tr>
+      <td class="pr-2 font-medium text-[#475467]">${r}</td>
+      <td class="pr-2"><select class="njReq px-1 py-0.5 text-xs" data-role="${r}" aria-label="${r} level"><option value="0">—</option>${lvlOpts}</select></td>
+      <td class="pr-2"><input class="njCnt px-1 py-0.5 w-12 text-xs" type="number" value="1" min="1" data-role="${r}" aria-label="${r} people"></td>
+      <td class="pr-2"><input class="njEff px-1 py-0.5 w-14 text-xs" type="number" value="100" min="5" max="100" step="5" data-role="${r}" aria-label="${r} effort %"></td>
+      <td class="whitespace-nowrap"><input class="njFrom px-1 py-0.5 w-12 text-xs" type="number" min="1" placeholder="1" data-role="${r}" aria-label="${r} from week">
+        <span class="text-[#98a2b3]">–</span>
+        <input class="njTo px-1 py-0.5 w-12 text-xs" type="number" min="1" placeholder="end" data-role="${r}" aria-label="${r} to week"></td>
+    </tr>`;
 
   $('controls').innerHTML=`
-    <div class="border-t border-slate-800 pt-3">
-      <div class="font-medium text-slate-300 mb-2">Nghỉ phép</div>
-      <div class="flex flex-wrap gap-2">
-        <select id="cLeaveP" class="bg-slate-800 rounded px-2 py-1">${pOpts}</select>
-        <input id="cLeaveFrom" type="date" min="${minDay}" value="${minDay}" class="bg-slate-800 rounded px-2 py-1">
-        <span class="text-slate-500 self-center">→</span>
-        <input id="cLeaveTo" type="date" min="${minDay}" value="${minDay}" class="bg-slate-800 rounded px-2 py-1">
+    <div class="panel flex flex-col justify-between">
+      <div>
+        <div class="font-semibold text-[#101828] mb-2">Leave</div>
+        <div class="space-y-2">
+          <select id="cLeaveP" class="px-2.5 py-1.5 w-full text-xs">${pOpts}</select>
+          <div class="flex items-center gap-1.5">
+            <input id="cLeaveFrom" type="date" min="${minDay}" value="${minDay}" class="px-2 py-1 flex-1 min-w-0 text-xs">
+            <span class="text-[#98a2b3]">→</span>
+            <input id="cLeaveTo" type="date" min="${minDay}" value="${minDay}" class="px-2 py-1 flex-1 min-w-0 text-xs">
+          </div>
+        </div>
       </div>
-      <button onclick="doLeave()" class="mt-2 icon-btn">Áp dụng</button>
+      <button onclick="doLeave()" class="mt-3 icon-btn self-start">Apply</button>
     </div>
 
-    <div class="border-t border-slate-800 pt-3">
-      <div class="font-medium text-slate-300 mb-2">Dời hạn dự án</div>
-      <div class="flex flex-wrap gap-2">
-        <select id="cSlipP" class="bg-slate-800 rounded px-2 py-1" onchange="syncSlipDate()">${jOpts}</select>
-        <input id="cSlipDate" type="date" min="${minDay}" class="bg-slate-800 rounded px-2 py-1">
+    <div class="panel flex flex-col justify-between">
+      <div>
+        <div class="font-semibold text-[#101828] mb-2">Move a deadline</div>
+        <div class="space-y-2">
+          <select id="cSlipP" class="px-2.5 py-1.5 w-full text-xs" onchange="syncSlipDate()">${jOpts}</select>
+          <input id="cSlipDate" type="date" min="${minDay}" class="px-2.5 py-1.5 w-full text-xs">
+        </div>
       </div>
-      <button onclick="doSlip()" class="mt-2 icon-btn">Áp dụng</button>
+      <button onclick="doSlip()" class="mt-3 icon-btn self-start">Apply</button>
     </div>
 
-    <div class="border-t border-slate-800 pt-3">
-      <div class="font-medium text-slate-300 mb-2">Thêm người <span class="text-slate-500 font-normal text-xs">kỹ năng: engineer:3,qa:2</span></div>
-      <div class="flex flex-wrap gap-2">
-        <input id="npName" placeholder="Tên (vd: Kim)" class="bg-slate-800 rounded px-2 py-1 w-32">
-        <select id="npRole" class="bg-slate-800 rounded px-2 py-1">${roleOpts}</select>
-        <input id="npSkills" placeholder="engineer:3,qa:2" class="bg-slate-800 rounded px-2 py-1 w-36">
-        <span class="self-center text-slate-500 text-xs">sức chứa (số dự án/lúc, vd 1)</span>
-        <input id="npCap" type="number" step="0.5" min="0.5" max="4" value="1" class="bg-slate-800 rounded px-2 py-1 w-16">
+    <div class="panel flex flex-col justify-between">
+      <div>
+        <div class="font-semibold text-[#101828] mb-2">Add person <span class="text-[#98a2b3] font-normal text-xs">(e.g. engineer:3)</span></div>
+        <div class="space-y-2">
+          <div class="flex gap-1.5">
+            <input id="npName" placeholder="Name (e.g. Kim)" class="px-2.5 py-1 flex-1 min-w-0 text-xs">
+            <select id="npRole" class="px-2 py-1 text-xs">${roleOpts}</select>
+          </div>
+          <div class="flex items-center gap-1.5">
+            <input id="npSkills" placeholder="engineer:3,qa:2" class="px-2.5 py-1 flex-1 min-w-0 text-xs">
+            <span class="text-[#667085] text-xs shrink-0" title="Full-time roles at once: 1 = one full-time role">Capacity:</span>
+            <input id="npCap" type="number" step="0.5" min="0.5" max="4" value="1" class="px-2 py-1 w-14 text-xs">
+          </div>
+          <div class="flex items-center gap-1.5">
+            <span class="text-[#667085] text-xs shrink-0" title="First working day. New hires default to ${HIRE_LEAD_WEEKS} weeks from today (recruit + onboard)">Starts:</span>
+            <input id="npStart" type="date" min="${minDay}" value="${hireIso}" class="px-2 py-1 flex-1 min-w-0 text-xs">
+          </div>
+        </div>
       </div>
-      <button onclick="doAddPerson()" class="mt-2 icon-btn">Áp dụng</button>
+      <button onclick="doAddPerson()" class="mt-3 icon-btn self-start">Apply</button>
     </div>
 
-    <div class="border-t border-slate-800 pt-3">
-      <div class="font-medium text-slate-300 mb-2">Thêm dự án</div>
-      <input id="njName" placeholder="Tên dự án (vd: Billing engine)" class="bg-slate-800 rounded px-2 py-1 w-full mb-2">
-      <div class="grid grid-cols-2 gap-2 text-xs">
-        ${['pm','analyst','engineer','qa'].map(r=>`
-          <div class="flex items-center gap-1"><span class="text-slate-400 w-14">${r}</span>
-            <select class="njReq bg-slate-800 rounded px-1 py-1" data-role="${r}"><option value="0">không</option>${lvlOpts}</select>
-            <span class="text-slate-600">×</span><input class="njCnt bg-slate-800 rounded px-1 py-1 w-9" type="number" value="1" min="1" data-role="${r}"></div>`).join('')}
+    <div class="panel md:col-span-3">
+      <div class="font-semibold text-[#101828] mb-2">Add project</div>
+      <div class="flex flex-wrap items-center gap-2 text-xs mb-3">
+        <input id="njName" placeholder="Project name (e.g. Billing engine)" class="px-2.5 py-1 flex-1 min-w-[180px] text-xs">
+        <span class="text-[#667085]">Weeks:</span><input id="njDur" type="number" value="3" min="1" class="px-1.5 py-0.5 w-14">
+        <span class="text-[#667085]">Due:</span><input id="njDead" type="date" min="${minDay}" value="2026-12-11" class="px-1.5 py-0.5">
+        <span class="text-[#667085]">Priority:</span><input id="njPrio" type="number" value="3" min="1" max="5" step="1" class="px-1.5 py-0.5 w-12">
       </div>
-      <div class="flex flex-wrap gap-2 mt-2">
-        <span class="self-center text-slate-500 text-xs">thời lượng</span><input id="njDur" type="number" value="3" class="bg-slate-800 rounded px-2 py-1 w-14"><span class="self-center text-slate-500 text-xs">tuần</span>
-        <span class="self-center text-slate-500 text-xs">hạn</span><input id="njDead" type="date" min="${minDay}" value="2026-12-11" class="bg-slate-800 rounded px-2 py-1">
-        <span class="self-center text-slate-500 text-xs">ưu tiên</span><input id="njPrio" type="number" value="3" min="1" max="5" step="1" class="bg-slate-800 rounded px-2 py-1 w-14">
+      <div class="flex flex-wrap items-center gap-2 text-xs mb-3">
+        <span class="text-[#667085]">Method:</span>
+        <select id="njMethod" class="px-1.5 py-0.5 text-xs" title="Waterfall: requirements → design → build → SIT → UAT → go-live with sign-off gates; roles without weeks follow the stage template">
+          <option value="simple">Simple (one block)</option><option value="waterfall">Waterfall stages</option></select>
+        <span class="text-[#667085]">UAT by:</span><input id="njUat" type="date" min="${minDay}" class="px-1.5 py-0.5">
+        <span class="text-[#667085]">Go-live by:</span><input id="njLive" type="date" min="${minDay}" class="px-1.5 py-0.5">
+        <span class="help">(stage dates: waterfall, 4+ weeks)</span>
       </div>
-      <button onclick="doAddProject()" class="mt-2 icon-btn">Áp dụng</button>
+      <div class="overflow-x-auto">
+        <table class="text-xs">
+          <thead><tr class="text-left text-[#667085]">
+            <th class="pr-2 pb-1 font-semibold">Role</th><th class="pr-2 pb-1 font-semibold">Level</th>
+            <th class="pr-2 pb-1 font-semibold">People</th>
+            <th class="pr-2 pb-1 font-semibold" title="Share of one full-time person, e.g. a PM at 20% = 1 day a week">Effort %</th>
+            <th class="pb-1 font-semibold" title="Weeks of the project this role works, e.g. QA in weeks 3–4 of 4. Blank = whole project">Weeks (blank = all)</th>
+          </tr></thead>
+          <tbody>${['pm','analyst','engineer','qa'].map(roleRow).join('')}</tbody>
+        </table>
+      </div>
+      <div class="flex items-center gap-3 mt-3">
+        <button onclick="doAddProject()" class="icon-btn">Apply</button>
+        <span class="help">Level — = role not needed.</span>
+      </div>
     </div>`;
   if(!FORM.cSlipDate) syncSlipDate();
   restoreForm();
@@ -461,15 +971,15 @@ function syncSlipDate(){
 
 function doLeave(){
   const a=$('cLeaveFrom').value, b=$('cLeaveTo').value;
-  if(!a||!b){ showErrors('nghỉ phép: cần đủ ngày bắt đầu và kết thúc'); return; }
-  if(a>b){ showErrors('nghỉ phép: ngày bắt đầu phải trước hoặc bằng ngày kết thúc'); return; }
-  if(DATA && a < DATA.today){ showErrors('nghỉ phép: ngày bắt đầu không được trước hôm nay'); return; }
+  if(!a||!b){ showErrors('leave: both start and end dates are required'); return; }
+  if(a>b){ showErrors('leave: start must be on or before end'); return; }
+  if(DATA && a < DATA.today){ showErrors('leave: cannot start before today'); return; }
   replan({leave:[{person_id:$('cLeaveP').value,from:a,to:b}]});
 }
 function doSlip(){
   const dl=$('cSlipDate').value;
-  if(!dl){ showErrors('dời hạn: cần chọn deadline'); return; }
-  if(DATA && dl < DATA.today){ showErrors('dời hạn: deadline đã qua'); return; }
+  if(!dl){ showErrors('deadline change: pick a deadline'); return; }
+  if(DATA && dl < DATA.today){ showErrors('deadline change: that date is in the past'); return; }
   replan({slip:[{project_id:$('cSlipP').value,deadline:dl}]});
 }
 function doAddPerson(){
@@ -477,37 +987,75 @@ function doAddPerson(){
   const skills={[role]:1};
   $('npSkills').value.split(',').forEach(s=>{const[k,v]=s.split(':');if(k&&v)skills[k.trim()]=+v;});
   const cap=+$('npCap').value;
-  if(!(cap>=0.5 && cap<=4)){ showErrors('sức chứa là số dự án làm cùng lúc (1 hoặc 2), không phải phần trăm'); return; }
-  replan({add_person:{id:'p'+(Date.now()%10000),name:$('npName').value||'Người mới',role,skills,capacity:cap}});
+  if(!(cap>=0.5 && cap<=4)){ showErrors('capacity is in full-time roles (1 = one full-time role, 2 = two), not a percentage'); return; }
+  const start=$('npStart').value;
+  const person={id:'p'+(Date.now()%10000),name:$('npName').value||'New person',role,skills,capacity:cap};
+  if(start && start>DATA.today) person.available_from=start;
+  replan({add_person:person});
 }
 function doAddProject(){
   const req={};
   document.querySelectorAll('.njReq').forEach(s=>{const lvl=+s.value;if(lvl>0)req[s.dataset.role]={level:lvl,count:1};});
   document.querySelectorAll('.njCnt').forEach(s=>{const r=s.dataset.role;if(req[r])req[r].count=+s.value||1;});
+  const dur=+$('njDur').value;
+  if(!Number.isInteger(dur) || dur<1){ showErrors('weeks must be a whole number ≥ 1'); return; }
+  for(const r of Object.keys(req)){
+    const val=c=>document.querySelector(`.${c}[data-role="${r}"]`).value;
+    const eff=+val('njEff')||100;
+    if(eff<5||eff>100){ showErrors(`${r}: effort must be 5–100%`); return; }
+    if(eff!==100) req[r].effort=eff;
+    const from=val('njFrom')?+val('njFrom'):1, to=val('njTo')?+val('njTo'):dur;
+    if(!(Number.isInteger(from)&&Number.isInteger(to)&&from>=1&&from<=to&&to<=dur)){
+      showErrors(`${r}: weeks must be within 1–${dur} (from ≤ to)`); return;
+    }
+    if(from!==1||to!==dur){ req[r].start=from-1; req[r].weeks=to-from+1; }
+  }
   const prio=+$('njPrio').value;
-  if(!Number.isInteger(prio) || prio<1 || prio>5){ showErrors('priority phải là số nguyên 1..5'); return; }
+  if(!Number.isInteger(prio) || prio<1 || prio>5){ showErrors('priority must be a whole number 1..5'); return; }
   const dl=$('njDead').value;
-  if(!dl){ showErrors('deadline bắt buộc'); return; }
-  replan({add_project:{id:'j'+(Date.now()%10000),name:$('njName').value||'Dự án mới',required:req,duration_weeks:+$('njDur').value,deadline:dl,priority:prio}});
+  if(!dl){ showErrors('deadline is required'); return; }
+    const method=$('njMethod').value;
+  const ms={};
+  if($('njUat').value) ms.uat=$('njUat').value;
+  if($('njLive').value) ms.deploy=$('njLive').value;
+  if(Object.keys(ms).length && (method!=='waterfall'||dur<4)){ showErrors('stage dates need the waterfall method and at least 4 weeks'); return; }
+  replan({add_project:{id:'j'+(Date.now()%10000),name:$('njName').value||'New project',required:req,duration_weeks:dur,deadline:dl,priority:prio,
+    method,...(Object.keys(ms).length?{milestones:ms}:{})}});
+}
+
+// Server joins reason facts with "; " — split only outside (...) so "(back Oct 21; only 2 days…)" stays whole.
+function reasonList(s){
+  const parts=[]; let depth=0, cur='';
+  for(let i=0;i<String(s||'').length;i++){
+    const c=s[i];
+    if(c==='(') depth++; else if(c===')') depth=Math.max(0,depth-1);
+    if(c===';' && s[i+1]===' ' && !depth){ parts.push(cur); cur=''; i++; continue; }
+    cur+=c;
+  }
+  if(cur) parts.push(cur);
+  return parts.map((p,i)=>`<div class="${i?'mt-1 text-[#475467]':'font-medium text-[#101828]'}">${esc(p)}</div>`).join('');
 }
 
 function warnList(ws){
   if(!ws||!ws.length) return '';
-  return `<div class="mt-1 space-y-1">${ws.map(w=>`<div class="text-amber-200/90 text-xs">${esc(w)}</div>`).join('')}</div>`;
+  return `<div class="mt-1.5 space-y-1">${ws.map(w=>`<div class="note note-warn !text-xs !py-1.5">${esc(w)}</div>`).join('')}</div>`;
 }
 
 async function doIntake(){
   const brief=$('briefInput').value.trim();
-  if(!brief){ $('intakeResult').innerHTML='<div class="text-amber-200 text-sm">Nhập brief hoặc câu hỏi giả định trước.</div>'; return; }
-  $('intakeResult').innerHTML='<div class="text-slate-400 text-sm">Đang phân tích…</div>';
+  if(!brief){ $('intakeResult').innerHTML='<div class="note note-warn">Type a brief or a what-if question first.</div>'; return; }
+  let t=0;
+  const tick=setInterval(()=>{ t+=1; $('intakeResult').innerHTML=`<div class="loading">Analyzing… ${t}s</div>`; },1000);
+  $('intakeResult').innerHTML='<div class="loading">Analyzing… 0s</div>';
   $('whatifBox').innerHTML='';
   const r=await post('/api/intake',{brief});
+  clearInterval(tick);
   if(r._status===429 || r.error){
-    $('intakeResult').innerHTML=`<div class="text-rose-300 text-sm">${esc(r.error||'quá nhiều yêu cầu AI')}</div>`;
+    $('intakeResult').innerHTML=`<div class="note note-bad">${esc(r.error||'too many AI requests')}</div>`;
     return;
   }
   if(r.intent==='invalid'){
-    $('intakeResult').innerHTML=`<div class="text-rose-300 text-sm">Không hợp lệ: ${esc(r.reason||'đầu vào không nhận diện được')}</div>`;
+    $('intakeResult').innerHTML=`<div class="note note-bad">Invalid: ${esc(r.reason||'input not recognized')}</div>`;
     return;
   }
   if(r.intent==='what_if'){
@@ -520,15 +1068,15 @@ async function doIntake(){
     const lvl=typeof v==='object'?v.level:v;
     const cnt=typeof v==='object'?(v.count||1):1;
     return `${k}≥${lvl}${cnt>1?` ×${cnt}`:''}`;
-  }).join(', ')||'chưa rõ';
+  }).join(', ')||'unknown';
   const needDeadline=!p.deadline;
-  $('intakeResult').innerHTML=`<div class="bg-slate-800/60 rounded-lg p-3 text-sm">
-    <div class="text-slate-300">Tên: <b>${esc(p.name)}</b> · ${esc(roles)} · ${p.duration_weeks} tuần · hạn ${p.deadline||'<span class="text-amber-300">chưa có</span>'} · ưu tiên ${p.priority}</div>
-    ${needDeadline?`<div class="mt-2 flex items-center gap-2 text-xs">Hạn chót (bắt buộc, vì AI không đọc được): <input id="intakeDeadline" type="date" min="${DATA?DATA.today:'2026-10-19'}" class="bg-slate-800 rounded px-2 py-1"></div>`:''}
+  $('intakeResult').innerHTML=`<div class="panel text-sm">
+    <div class="text-[#344054]">Name: <b class="text-[#101828]">${esc(p.name)}</b> · ${esc(roles)} · ${p.duration_weeks} weeks · due ${p.deadline||'<span class="text-amber-600 font-semibold">not set</span>'} · priority ${p.priority}</div>
+    ${needDeadline?`<div class="mt-2 flex items-center gap-2 text-xs text-[#475467]">Deadline (required — the AI could not read one): <input id="intakeDeadline" type="date" min="${DATA?DATA.today:'2026-10-19'}" class="px-2 py-1"></div>`:''}
     ${warnList(r.warnings)}
-    <div class="mt-2 flex gap-2">
-      <button onclick="confirmIntake()" class="btn btn-ok py-1 px-3 text-sm">Xác nhận và thêm</button>
-      <button onclick="PENDING=null;$('intakeResult').innerHTML=''" class="btn btn-ghost py-1 px-3 text-sm">Hủy</button>
+    <div class="mt-3 flex gap-2">
+      <button onclick="confirmIntake()" class="btn btn-primary">Confirm and add</button>
+      <button onclick="PENDING=null;$('intakeResult').innerHTML=''" class="btn btn-ghost">Cancel</button>
     </div></div>`;
 }
 function confirmIntake(){
@@ -538,97 +1086,146 @@ function confirmIntake(){
   const extra=$('intakeDeadline');
   if(extra && extra.value) deadline=extra.value;
   if(!deadline){
-    showErrors('deadline không đọc được — hãy chọn hạn trước khi thêm (không tự gán 31/12)');
+    showErrors('could not read the deadline — pick one before adding (12-31 is never assumed)');
     return;
   }
   replan({add_project:{id:'j'+(Date.now()%10000),name:p.name,required:p.required||{},duration_weeks:p.duration_weeks||3,deadline,priority:p.priority||3}});
   PENDING=null;
-  $('intakeResult').innerHTML='<div class="text-emerald-400 text-sm">Đã thêm dự án và xếp lại.</div>';
+  $('intakeResult').innerHTML='<div class="note note-ok">Project added and plan updated.</div>';
   $('briefInput').value='';
 }
 
 function showWhatIfPrompt(r){
   const errs=r.errors||[];
   const payload=r.payload||{};
-  const summary=r.summary||'kịch bản giả định';
+  const summary=r.summary||'what-if scenario';
   if(errs.length && !Object.keys(payload).length){
-    $('intakeResult').innerHTML=`<div class="text-rose-300 text-sm">${esc(errs.join('; '))}</div>${warnList(r.warnings)}`;
+    $('intakeResult').innerHTML=`<div class="note note-bad">${esc(errs.join('; '))}</div>${warnList(r.warnings)}`;
     return;
   }
   PENDING_WHATIF=payload;
-  $('intakeResult').innerHTML=`<div class="bg-slate-800/60 rounded-lg p-3 text-sm">
-    <div class="text-slate-300">Kịch bản: <b>${esc(summary)}</b> <span class="text-slate-500">(chưa áp dụng)</span></div>
+  $('intakeResult').innerHTML=`<div class="panel !border-[#c7d2fe] text-sm">
+    <div class="text-[#344054]">Scenario: <b class="text-[#101828]">${esc(summary)}</b> <span class="text-[#98a2b3]">(not applied)</span></div>
     ${warnList(r.warnings)}
-    ${errs.length?`<div class="text-amber-200 text-xs mt-1">${errs.map(esc).join('; ')}</div>`:''}
-    <div class="mt-2 flex gap-2">
-      <button onclick="runWhatIf()" class="btn btn-primary py-1 px-3 text-sm">Thử kịch bản</button>
-      <button onclick="PENDING_WHATIF=null;$('intakeResult').innerHTML='';$('whatifBox').innerHTML=''" class="btn btn-ghost py-1 px-3 text-sm">Hủy</button>
+    ${errs.length?`<div class="text-amber-700 text-xs mt-1">${errs.map(esc).join('; ')}</div>`:''}
+    <div class="mt-3 flex gap-2">
+      <button onclick="runWhatIf()" class="btn btn-primary">Try scenario</button>
+      <button onclick="PENDING_WHATIF=null;$('intakeResult').innerHTML='';$('whatifBox').innerHTML=''" class="btn btn-ghost">Cancel</button>
     </div></div>`;
 }
 
+// Scenario previews come back as up to 3 ways to absorb the change; the
+// manager picks one and Apply sends that option's flags.
+let WHATIF_OPTS=null, WHATIF_SEL=0, WHATIF_BASE_LATE=0;
 async function runWhatIf(){
   if(!PENDING_WHATIF) return;
-  $('whatifBox').innerHTML='<div class="card text-sm text-slate-400">Đang chạy trên bản thử…</div>';
-  const body={...PENDING_WHATIF, preview:true};
+  const reopt=!!PENDING_WHATIF.reoptimize;
+  $('whatifBox').innerHTML=`<div class="card"><div class="loading">${reopt?'Re-solving on a trial copy…':'Trying three ways to absorb the change…'}</div></div>`;
+  const body={freeze_existing:true, ...PENDING_WHATIF, preview:true, options:!reopt};
   const r=await post('/api/replan', body);
   if(r.error){
-    $('whatifBox').innerHTML=`<div class="card text-sm text-rose-300">${esc((r.error||[]).join?r.error.join('; '):r.error)}</div>`;
+    $('whatifBox').innerHTML=`<div class="note note-bad">${esc((r.error||[]).join?r.error.join('; '):r.error)}</div>`;
     return;
   }
-  renderWhatIf(r);
+  WHATIF_OPTS=r.options||null; WHATIF_SEL=0;
+  WHATIF_BASE_LATE=((r.before||{}).risks||[]).reduce((t,x)=>t+lateOf(x),0);
+  renderWhatIf(WHATIF_OPTS?{delta:WHATIF_OPTS[0].delta}:r);
+}
+function selectWhatIfOption(i){
+  WHATIF_SEL=i;
+  renderWhatIf({delta:WHATIF_OPTS[i].delta});
+}
+function whatIfOptionCards(){
+  if(!WHATIF_OPTS) return '';
+  if(WHATIF_OPTS.length===1)
+    return `<div class="help mb-3">Least disruption, best outcome and keeping every squad all give the same plan.</div>`;
+  const best=Math.min(...WHATIF_OPTS.map(o=>o.late_days+1000*o.unstaffable));
+  return `<div class="grid grid-cols-1 md:grid-cols-${WHATIF_OPTS.length} gap-3 mb-4" role="radiogroup" aria-label="Ways to absorb the change">${WHATIF_OPTS.map((o,i)=>{
+    const sel=i===WHATIF_SEL;
+    const diff=o.late_days-WHATIF_BASE_LATE;
+    const lateTxt=diff===0?'no change in late days':diff<0?`${-diff} fewer late days`:`${diff} more late days`;
+    const stats=[`${o.changed} project${o.changed===1?'':'s'} changed`,`${o.swaps} ${o.swaps===1?'person':'people'} swapped`]
+      .concat(o.cover_days?[`${o.cover_days}d to cover`]:[]).concat(o.unstaffable?[`${o.unstaffable} unstaffable`]:[]);
+    return `<button type="button" role="radio" aria-checked="${sel}" onclick="selectWhatIfOption(${i})"
+      class="text-left rounded-lg border p-3 transition ${sel?'border-[#4f46e5] bg-[#eef2ff] ring-1 ring-[#4f46e5]':'border-[#e4e7ec] bg-white hover:border-[#c7d2fe]'}">
+      <div class="flex items-center justify-between gap-2">
+        <span class="font-semibold text-[13.5px] text-[#101828]">${esc(o.label)}</span>
+        ${o.late_days+1000*o.unstaffable===best?'<span class="chip pill-ok">Fewest late days</span>':''}
+      </div>
+      <div class="text-xs text-[#667085] mt-1">${esc(o.blurb)}</div>
+      <div class="mt-2 text-[13px] font-semibold ${diff>0?'text-[#b42318]':diff<0?'text-[#067647]':'text-[#344054]'}">${o.late_days} late days <span class="font-normal text-xs">(${lateTxt})</span></div>
+      <div class="text-xs text-[#475467] mt-0.5">${stats.join(' · ')}</div>
+    </button>`;
+  }).join('')}</div>`;
+}
+
+async function doReoptimize(){
+  PENDING_WHATIF={reoptimize:true, freeze_existing:false};
+  await runWhatIf();
 }
 
 function renderWhatIf(r){
+  const isReopt = !!(PENDING_WHATIF && PENDING_WHATIF.reoptimize);
   const d=r.delta||{projects:[],utilization:[],summary:'',causes:[]};
-  const rows=d.projects.map(p=>{
-    const hl=p.changed?'bg-amber-500/10':'';
-    const late=s=>String(s).startsWith('TRỄ')||s==='không xếp được';
+  // unchanged projects are noise in a before/after view
+  const shown=d.projects.filter(p=>p.changed);
+  const hidden=d.projects.length-shown.length;
+  const rows=shown.map(p=>{
+    const late=s=>String(s).startsWith('LATE')||s==='unstaffable';
     const dl = (p.before_deadline && p.after_deadline && p.before_deadline!==p.after_deadline)
-      ? `<div class="text-amber-300">hạn ${esc(p.before_deadline.slice(5))} → ${esc(p.after_deadline.slice(5))}</div>` : '';
-    return `<tr class="border-t border-slate-800 ${hl}">
-      <td class="py-1 font-medium">${esc(p.name)}${dl}</td>
-      <td class="py-1 text-xs">${esc(p.before_squad)}<div class="${late(p.before_status)?'text-rose-400':'text-slate-500'}">${esc(p.before_status)}</div></td>
-      <td class="py-1 text-xs">${esc(p.after_squad)}<div class="${late(p.after_status)?'text-rose-400':'text-emerald-400'}">${esc(p.after_status)}</div></td>
+      ? `<div class="text-amber-700 font-medium text-xs">deadline ${esc(fmtD(p.before_deadline))} → ${esc(fmtD(p.after_deadline))}</div>` : '';
+    const startChg = p.before_start!==p.after_start || p.before_start_date!==p.after_start_date;
+    const startLine = `<div class="text-xs ${startChg?'text-amber-700 font-medium':'text-[#667085]'}">start ${esc(fmtD(p.before_start_date))} → ${esc(fmtD(p.after_start_date))}</div>`;
+    return `<tr class="border-t border-[#f2f4f7] align-top">
+      <td class="py-2.5 px-3 font-semibold text-[#101828]">${esc(p.name)}${dl}${startLine}</td>
+      <td class="py-2.5 pr-2 text-xs text-[#344054]">${esc(p.before_squad)}<div class="${late(p.before_status)?'text-rose-600 font-semibold':'text-[#667085]'}">${esc(p.before_status)}</div></td>
+      <td class="py-2.5 text-xs text-[#344054]">${esc(p.after_squad)}<div class="${late(p.after_status)?'text-rose-600 font-semibold':'text-emerald-600 font-semibold'}">${esc(p.after_status)}</div></td>
+      <td class="py-2.5 pl-2 pr-3 text-xs text-[#344054]">${reasonList(p.reason)}</td>
     </tr>`;
   }).join('');
   const util=d.utilization.map(u=>{
     const b=u.before==null?'—':u.before+'%';
     const a=u.after==null?'—':u.after+'%';
     const changed=u.before!==u.after;
-    return `<span class="text-xs ${changed?'text-amber-200':'text-slate-400'}">${esc(u.name)} ${b} → ${a}</span>`;
+    return `<span class="text-xs ${changed?'text-amber-700 font-semibold':'text-[#667085]'}">${esc(u.name)} ${b} → ${a}</span>`;
   }).join(' · ');
-  const causes=(d.causes||[]).map(c=>`<div class="text-sm text-slate-300">• ${esc(c)}</div>`).join('');
-  $('whatifBox').innerHTML=`<div class="card border-slate-700">
-    <div class="flex items-baseline justify-between mb-3">
-      <span class="section-title">So sánh trước / sau</span>
-      <span class="help">${esc(d.summary||'')}</span>
+  $('whatifBox').innerHTML=`<div class="card ring-2 ring-[#c7d2fe]">
+    <div class="card-head">
+      <div>
+        <div class="flex items-center gap-2"><span class="chip pill-mute">Preview · not saved</span>
+          <span class="card-title">${isReopt?'Re-optimize everything':'Scenario before / after'}</span></div>
+        <div class="card-sub">${esc(d.summary||'')}</div>
+      </div>
+      <div class="flex gap-2">
+        <button onclick="$('whatifBox').innerHTML='';PENDING_WHATIF=null;WHATIF_OPTS=null" class="btn btn-ghost">Dismiss</button>
+        <button onclick="applyWhatIf()" class="btn btn-primary">${isReopt?'Approve re-optimization':WHATIF_OPTS&&WHATIF_OPTS.length>1?`Apply “${esc(WHATIF_OPTS[WHATIF_SEL].label)}”`:'Apply scenario'}</button>
+      </div>
     </div>
-    ${causes?`<div class="mb-3 bg-slate-800/40 rounded-lg p-3 text-sm">${causes}</div>`:''}
-    <div class="overflow-x-auto">
-      <table class="w-full text-sm">
-        <thead><tr class="text-slate-500 text-left"><th class="py-1 font-medium">Dự án</th><th class="font-medium">Trước</th><th class="font-medium">Sau</th></tr></thead>
+    ${whatIfOptionCards()}
+    ${shown.length?`<div class="overflow-x-auto border border-[#e4e7ec] rounded-lg">
+      <table class="w-full min-w-[720px] text-[13px]">
+        <thead><tr class="text-left bg-[#f9fafb] border-b border-[#e4e7ec] text-xs text-[#667085]"><th class="py-2.5 px-3 font-semibold">Project</th><th class="py-2.5 font-semibold">Before</th><th class="py-2.5 font-semibold">After</th><th class="py-2.5 font-semibold pl-2 pr-3">Why</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
-    </div>
-    <div class="mt-3 help">Tải: ${util}</div>
-    <div class="mt-3 flex gap-2">
-      <button onclick="applyWhatIf()" class="btn btn-ok py-1 px-3 text-sm">Áp dụng kịch bản</button>
-      <button onclick="$('whatifBox').innerHTML='';PENDING_WHATIF=null" class="btn btn-ghost py-1 px-3 text-sm">Bỏ qua</button>
-    </div>
+    </div>`:'<div class="note note-ok">No existing project changes.</div>'}
+    ${hidden?`<div class="mt-2 help">${hidden} unchanged project${hidden>1?'s':''} not shown.</div>`:''}
+    <div class="mt-3 help">Team load: ${util}</div>
   </div>`;
 }
 
 async function applyWhatIf(){
   if(!PENDING_WHATIF) return;
-  const payload={...PENDING_WHATIF};
-  delete payload.preview;
-  $('whatifBox').innerHTML='<div class="text-slate-400 text-sm p-3">Đang áp dụng…</div>';
+  const isReopt = !!PENDING_WHATIF.reoptimize;
+  const payload={...PENDING_WHATIF, ...(WHATIF_OPTS?WHATIF_OPTS[WHATIF_SEL].apply:{})};
+  delete payload.preview; delete payload.options;
+  if(!isReopt && payload.freeze_existing === undefined) payload.freeze_existing=true;
+  $('whatifBox').innerHTML='<div class="loading p-3">Applying…</div>';
   const d=await replan(payload);
   if(d && !d.error){
-    $('whatifBox').innerHTML='<div class="border-l-2 border-emerald-500 bg-emerald-500/10 rounded-r-lg px-3 py-2 text-sm">Đã áp dụng kịch bản và xếp lại.</div>';
+    $('whatifBox').innerHTML=`<div class="note note-ok">${isReopt?'Re-optimized plan approved and saved.':'Scenario applied and plan updated.'}</div>`;
     $('intakeResult').innerHTML='';
     $('briefInput').value='';
-    PENDING_WHATIF=null;
+    PENDING_WHATIF=null; WHATIF_OPTS=null;
   }
 }
 
@@ -636,53 +1233,117 @@ let SUGGEST_GEN = 0;
 async function fetchSuggest(d){
   const box=$('suggestBox');
   if(!box) return;
-  if(!(d.bottlenecks||[]).length){ box.innerHTML=''; return; }
+  const late=(d.risks||[]).some(r=>r.risk==='late');
+  const un=(d.unstaffable||[]).length;
+  const calm=`<div class="card"><div class="card-title">Suggested fixes</div>
+    <div class="card-sub">Nothing to fix — every project is staffed and on time.</div></div>`;
+  if(!late && !un && !(d.bottlenecks||[]).length){ box.innerHTML=calm; return; }
   const gen=++SUGGEST_GEN;
-  box.innerHTML='<div class="card text-sm text-slate-400">Đang thử phương án gỡ nút thắt…</div>';
+  box.innerHTML=`<div class="card"><div class="card-title">Suggested fixes</div>
+    <div class="card-sub">Trying options on a trial copy of the plan…</div></div>`;
   const r=await post('/api/suggest');
   if(gen!==SUGGEST_GEN) return;
-  if(r.error){ box.innerHTML=`<div class="text-rose-300 text-sm">${esc(r.error.join?r.error.join('; '):r.error)}</div>`; return; }
+  if(r.error){ box.innerHTML=`<div class="card text-[#b42318] text-sm">${esc(r.error.join?r.error.join('; '):r.error)}</div>`; return; }
   const rows=r.suggestions||[];
-  if(!rows.length){ box.innerHTML=''; return; }
+  if(!rows.length){ box.innerHTML=calm; return; }
   const base=r.baseline_late_days;
   box.innerHTML=`<div class="card">
-    <div class="section-title mb-1">Gợi ý cách gỡ</div>
-    <p class="help mb-3">Đang trễ tổng ${base} ngày. Phương án chạy trên bản thử, xếp theo tổng ngày trễ.</p>
-    <div class="space-y-2">${rows.map((s,i)=>{
+    <div class="card-head">
+      <div>
+        <div class="card-title">Suggested fixes</div>
+        <div class="card-sub">The plan is <b class="text-[#101828]">${base} days</b> late in total. Each option was simulated on a trial copy; ranked by what is left.</div>
+      </div>
+    </div>
+    <div class="divide-y divide-[#f2f4f7]">${rows.map(s=>{
       const payload=JSON.stringify(s.payload).replace(/'/g,"\\'");
-      const better=s.total_late_days<base;
-      return `<div class="border border-slate-800 rounded-lg p-3">
-        <div class="flex items-baseline justify-between gap-2">
-          <div><span class="text-slate-500 text-xs">${s.rank}.</span> <b>${esc(s.title)}</b></div>
-          <div class="text-xs ${better?'text-emerald-400':'text-slate-400'}">trễ ${s.total_late_days} ngày${s.unstaffable?` · ${s.unstaffable} không xếp được`:''}</div>
+      const saved=base-s.total_late_days;
+      const effect=saved>0?`<span class="chip pill-ok">−${saved} late days</span>`
+                  :`<span class="chip pill-mute">no improvement</span>`;
+      return `<div class="py-3 first:pt-0 last:pb-0 flex items-start gap-3">
+        <div class="w-6 h-6 rounded-full bg-[#eef2ff] text-[#4338ca] text-xs font-semibold flex items-center justify-center shrink-0">${s.rank}</div>
+        <div class="flex-1 min-w-0">
+          <div class="text-[13.5px] font-medium text-[#101828]">${esc(s.title)}</div>
+          <div class="text-xs text-[#667085] mt-0.5">${s.total_late_days} late days left${s.unstaffable?` · ${s.unstaffable} unstaffable`:''}${s.note?` · ${esc(s.note)}`:''}</div>
         </div>
-        <button class="mt-2 icon-btn" onclick='applySuggestion(${payload})'>Áp dụng</button>
+        <div class="flex flex-col items-end gap-1.5 shrink-0">
+          ${effect}
+          <button class="link-btn !text-[#4f46e5] hover:!text-[#3538cd]" onclick='applySuggestion(${payload})'>Apply</button>
+        </div>
       </div>`;
     }).join('')}</div>
   </div>`;
 }
 async function applySuggestion(payload){
-  const d=await replan(payload);
+  $('whatifBox').innerHTML='<div class="loading p-3">Applying fix…</div>';
+  const d=await replan({...payload, freeze_existing:true});
   if(d && !d.error){
-    $('suggestBox').innerHTML='<div class="border-l-2 border-emerald-500 bg-emerald-500/10 rounded-r-lg px-3 py-2 text-sm">Đã áp dụng phương án gỡ.</div>';
+    $('whatifBox').innerHTML='<div class="note note-ok">Fix applied.</div>';
   }
 }
 
 async function doExplain(){
-  $('aiExplain').innerHTML='<div class="text-slate-400 text-sm">Đang giải thích…</div>';
+  $('aiExplain').innerHTML='<div class="loading">Explaining…</div>';
   const r=await post('/api/explain');
-  if(r.error){ $('aiExplain').innerHTML=`<div class="text-rose-400 text-sm">${esc(r.error)}</div>`; return; }
-  $('aiExplain').innerHTML=`<div class="bg-slate-800/60 rounded-lg p-3 text-sm">${md(r.explanation)}</div>`;
+  if(r.error){ $('aiExplain').innerHTML=`<div class="note note-bad">${esc(r.error)}</div>`; return; }
+  $('aiExplain').innerHTML=`<div class="bg-indigo-50/60 border border-indigo-200 rounded-lg p-3.5 text-sm text-[#101828]">${md(r.explanation)}</div>`;
 }
 
 let DOC_TASKS = [];
+let DOC_METHOD = 'waterfall';   // imported documents are usually staged (requirements → … → go-live)
 let DOC_STAFF = null;
+
+let DOC_TICK=null;
+function startDocWait(msg){
+  let t=0;
+  if(DOC_TICK) clearInterval(DOC_TICK);
+  const paint=()=>{ if($('docWizard')) $('docWizard').innerHTML=`<div class="loading">${esc(msg)} ${t}s</div>`; };
+  paint();
+  DOC_TICK=setInterval(()=>{ t+=1; paint(); },1000);
+}
+function stopDocWait(){ if(DOC_TICK){ clearInterval(DOC_TICK); DOC_TICK=null; } }
+let MANUAL_N=0;
+function blankTask(){
+  MANUAL_N+=1;
+  return {id:'man'+MANUAL_N, name:'', required:{engineer:{level:3,count:1}}, duration_weeks:3, deadline:'', priority:3, depends_on:[], rationale:'', warnings:[], include:true, fieldError:''};
+}
+// "2 engineer:4, pm:4 20%, qa:3 w3-4" — optional "N%" effort and "wA-B" weeks (1-based) per role
+function parseReq(s){
+  const req={};
+  String(s||'').split(',').forEach(part=>{
+    let p=part.trim();
+    if(!p) return;
+    const extra={};
+    p=p.replace(/\s*(\d+)\s*%/,(_,e)=>{ extra.effort=+e; return ''; })
+       .replace(/\s*w(\d+)(?:\s*-\s*(\d+))?/i,(_,a,b)=>{ extra.start=+a-1; extra.weeks=(b?+b:+a)-+a+1; return ''; })
+       .trim();
+    let spec=null, role=null;
+    let m=p.match(/^(\d+)\s+([a-zA-Z_]+)\s*[:=≥]?\s*(\d+)?$/);
+    if(m){ role=m[2]; spec={level:m[3]?+m[3]:3, count:+m[1]}; }
+    else if((m=p.match(/^([a-zA-Z_]+)\s*[:=≥]\s*(\d+)(?:\s*[×x]\s*(\d+))?$/))){ role=m[1]; spec={level:+m[2], count:m[3]?+m[3]:1}; }
+    else if((m=p.match(/^([a-zA-Z_]+)\s+(\d+)$/))){ role=m[1]; spec={level:3, count:+m[2]}; }
+    if(!spec) return;
+    if(extra.effort && extra.effort!==100) spec.effort=extra.effort;
+    if(extra.weeks>0 && extra.start>=0){ spec.start=extra.start; spec.weeks=extra.weeks; }
+    req[role.toLowerCase()]=spec;
+  });
+  return req;
+}
+function reqText(req){
+  return Object.entries(req||{}).map(([k,v])=>{
+    const o=typeof v==='object'?v:{level:v};
+    const cnt=o.count||1;
+    let t=cnt>1 ? `${cnt} ${k}:${o.level}` : `${k}:${o.level}`;
+    if(o.effort&&o.effort!==100) t+=` ${o.effort}%`;
+    if(o.weeks!=null) t+=` w${(o.start||0)+1}-${(o.start||0)+o.weeks}`;
+    return t;
+  }).join(', ');
+}
 
 function loadDocFile(el){
   const f=el.files && el.files[0]; if(!f) return;
   const name=(f.name||'').toLowerCase();
   if(!/\.(txt|md|text|csv)$/.test(name)){
-    $('docWizard').innerHTML='<div class="text-rose-300 text-sm">Chỉ nhận file chữ (.txt, .md). File Word/PDF chưa đọc được.</div>';
+    $('docWizard').innerHTML='<div class="note note-bad">Only text files (.txt, .md) are supported. Word/PDF cannot be read yet.</div>';
     el.value='';
     return;
   }
@@ -690,11 +1351,13 @@ function loadDocFile(el){
   reader.onload=()=>{
     const s=String(reader.result||'');
     if(s.includes('\0') || /[\x00-\x08\x0e-\x1f]/.test(s.slice(0,800))){
-      $('docWizard').innerHTML='<div class="text-rose-300 text-sm">File không phải văn bản thuần. Xuất ra .txt hoặc .md rồi mở lại.</div>';
+      $('docWizard').innerHTML='<div class="note note-bad">This is not a plain-text file. Export it to .txt or .md and open it again.</div>';
       el.value='';
       return;
     }
     $('docInput').value=s;
+    el.value='';
+    if(!DOC_TASKS.length) $('docWizard').innerHTML='';
   };
   reader.readAsText(f);
 }
@@ -703,19 +1366,28 @@ function roleText(req){
   return Object.entries(req||{}).map(([k,v])=>{
     const lvl=typeof v==='object'?v.level:v;
     const cnt=typeof v==='object'?(v.count||1):1;
-    return `${k}≥${lvl}${cnt>1?' ×'+cnt:''}`;
+    const o=typeof v==='object'?v:{};
+    const extra=(o.effort&&o.effort!==100?` ${o.effort}%`:'')+(o.weeks!=null?` wk ${(o.start||0)+1}–${(o.start||0)+o.weeks}`:'');
+    return `${k}≥${lvl}${cnt>1?' ×'+cnt:''}${extra}`;
   }).join(', ')||'—';
 }
 
 async function doDecompose(){
   const doc=$('docInput').value.trim();
-  if(!doc){ $('docWizard').innerHTML='<div class="text-amber-200 text-sm">Dán tài liệu hoặc mở file trước.</div>'; return; }
-  $('docStepLabel').textContent='Bước 1 / 2 — đang đọc tài liệu…';
-  $('docWizard').innerHTML='<div class="text-slate-400 text-sm">Manager đang tách gói việc từ tài liệu…</div>';
+  if(!doc){ $('docWizard').innerHTML='<div class="note note-warn">Paste a document or open a file first.</div>'; return; }
+  $('docStepLabel').textContent='Step 1 / 2 — reading document…';
+  startDocWait('Reading document…');
   const r=await post('/api/decompose',{document:doc});
-  if(r._status===429 || r.error){
-    $('docWizard').innerHTML=`<div class="text-rose-300 text-sm">${esc(Array.isArray(r.error)?r.error.join('; '):r.error)}</div>`;
-    $('docStepLabel').textContent='Bước 1 / 2';
+  stopDocWait();
+  if(r._status===429){
+    $('docWizard').innerHTML=`<div class="note note-bad">${esc(r.error||'too many AI requests')}</div>`;
+    $('docStepLabel').textContent='Step 1 / 2';
+    return;
+  }
+  if(r.error && !(r.tasks&&r.tasks.length)){
+    DOC_TASKS=[blankTask()];
+    DOC_STAFF=null;
+    renderDocTasks('', [String(r.error), 'Fill in the packages below by hand, then approve the split.']);
     return;
   }
   DOC_TASKS=(r.tasks||[]).map((t,i)=>({...t, include: !t.error, fieldError:''}));
@@ -723,51 +1395,76 @@ async function doDecompose(){
   renderDocTasks(r.summary||'', r.warnings||[]);
 }
 
+// dependencies live in DOC_TASKS[i].depends_on; chips edit it and redraw
+function addDocDep(i,id){ if(!id) return; harvestDocTasks(); const t=DOC_TASKS[i]; t.depends_on=[...(t.depends_on||[]),id]; renderDocTasks(); }
+function removeDocDep(i,id){ harvestDocTasks(); const t=DOC_TASKS[i]; t.depends_on=(t.depends_on||[]).filter(x=>x!==id); renderDocTasks(); }
+let DOC_SUMMARY='', DOC_WARN=[];
 function renderDocTasks(summary, extraWarn){
-  $('docStepLabel').textContent='Bước 1 / 2 — duyệt chia việc';
+  if(summary!==undefined) DOC_SUMMARY=summary;
+  if(extraWarn!==undefined) DOC_WARN=extraWarn;
+  summary=DOC_SUMMARY; extraWarn=DOC_WARN;
+  $('docStepLabel').textContent='Step 1 / 2 — review the split';
   if(!DOC_TASKS.length){
-    $('docWizard').innerHTML='<div class="text-rose-300 text-sm">Không tách được gói việc.</div>';
+    $('docWizard').innerHTML='<div class="note note-bad">Could not split into work packages.</div>';
     return;
   }
   const rows=DOC_TASKS.map((t,i)=>{
     const warn=(t.warnings||[]).join('; ');
-    const opts=['<option value="">—</option>'].concat(DOC_TASKS.filter(x=>x.id!==t.id).map(x=>`<option value="${x.id}" ${(t.depends_on||[])[0]===x.id?'selected':''}>${esc(x.name)}</option>`)).join('');
-    return `<tr class="border-t border-slate-800 align-top">
-      <td class="py-2"><input type="checkbox" class="docInc" data-i="${i}" ${t.include?'checked':''}></td>
-      <td class="py-2"><input class="docName bg-slate-800 border border-slate-700 rounded px-2 py-1 w-full text-sm" data-i="${i}" value="${esc(t.name||'')}"></td>
-      <td class="py-2 text-xs text-slate-400">${esc(roleText(t.required))}</td>
-      <td class="py-2">
-        <input type="number" min="1" class="docDur bg-slate-800 border ${t.fieldError&&t.fieldError.includes('tuần')?'border-rose-500':'border-slate-700'} rounded px-2 py-1 w-14 text-sm" data-i="${i}" value="${t.duration_weeks??''}">
-        ${t.duration_inferred?'<div class="text-[10px] text-amber-200">AI đoán</div>':''}
+    return `<tr class="align-top">
+      <td class="py-2 pr-2"><input type="checkbox" class="docInc" data-i="${i}" ${t.include?'checked':''}></td>
+      <td class="py-2 pr-2 min-w-[200px]"><textarea rows="2" class="docName px-2 py-1 w-full text-sm resize-y" data-i="${i}">${esc(t.name||'')}</textarea></td>
+      <td class="py-2 pr-2"><input class="docReq px-2 py-1 w-52 text-xs" data-i="${i}" value="${esc(reqText(t.required))}" placeholder="2 engineer:4, pm:4 20%, qa:3 w3-4" title="role:level · optional N% effort · optional wA-B = weeks A to B of the package"></td>
+      <td class="py-2 pr-2">
+        <input type="number" min="1" class="docDur ${t.fieldError&&t.fieldError.includes('weeks')?'!border-rose-500':''} px-2 py-1 w-14 text-sm" data-i="${i}" value="${t.duration_weeks??''}">
+        ${t.duration_inferred?'<div class="text-[10px] text-amber-700 font-medium">AI guess</div>':''}
       </td>
-      <td class="py-2">
-        <input type="date" class="docDead bg-slate-800 border ${t.fieldError&&t.fieldError.includes('hạn')?'border-rose-500':'border-slate-700'} rounded px-2 py-1 text-sm" data-i="${i}" value="${t.deadline||''}">
-        ${t.fieldError&&t.fieldError.includes('hạn')?`<div class="text-[10px] text-rose-300">${esc(t.fieldError)}</div>`:''}
+      <td class="py-2 pr-2">
+        <input type="date" class="docDead ${t.fieldError&&t.fieldError.includes('deadline')?'!border-rose-500':''} px-2 py-1 text-sm" data-i="${i}" value="${t.deadline||''}">
+        ${t.fieldError&&t.fieldError.includes('deadline')?`<div class="text-[10px] text-rose-600 font-medium">${esc(t.fieldError)}</div>`:''}
       </td>
-      <td class="py-2">
-        <input type="number" min="1" max="5" class="docPrio bg-slate-800 border ${t.fieldError&&t.fieldError.includes('ưu tiên')?'border-rose-500':'border-slate-700'} rounded px-2 py-1 w-12 text-sm" data-i="${i}" value="${t.priority??''}">
-        ${t.priority_inferred?'<div class="text-[10px] text-amber-200">AI đoán</div>':''}
+      <td class="py-2 pr-2">
+        <input type="number" min="1" max="5" class="docPrio ${t.fieldError&&t.fieldError.includes('priority')?'!border-rose-500':''} px-2 py-1 w-12 text-sm" data-i="${i}" value="${t.priority??''}">
+        ${t.priority_inferred?'<div class="text-[10px] text-amber-700 font-medium">AI guess</div>':''}
       </td>
-      <td class="py-2"><select class="docDep bg-slate-800 border border-slate-700 rounded px-1 py-1 text-xs w-32" data-i="${i}">${opts}</select></td>
-      <td class="py-2 text-xs text-slate-500">${esc(t.rationale||'')}${t.error?`<div class="text-rose-300">${esc(t.error)}</div>`:''}${warn?`<div class="text-amber-200/80">${esc(warn)}</div>`:''}${t.fieldError&&!t.fieldError.includes('hạn')?`<div class="text-rose-300">${esc(t.fieldError)}</div>`:''}</td>
+      <td class="py-2 pr-2 text-xs whitespace-nowrap">
+        <label class="flex items-center gap-1 mb-1"><span class="w-12 text-[#667085]">UAT</span><input type="date" class="docUat px-1.5 py-0.5 text-xs" data-i="${i}" value="${(t.milestones||{}).uat||''}"></label>
+        <label class="flex items-center gap-1"><span class="w-12 text-[#667085]">Go-live</span><input type="date" class="docLive px-1.5 py-0.5 text-xs" data-i="${i}" value="${(t.milestones||{}).deploy||''}"></label>
+      </td>
+      <td class="py-2 pr-2 text-xs text-[#344054] min-w-[170px]">
+        <div class="flex flex-wrap gap-1">${(t.depends_on||[]).map(id=>{
+          const dep=DOC_TASKS.find(x=>x.id===id); if(!dep) return '';
+          return `<span class="person-chip max-w-[170px]" title="${esc(dep.name)}"><span class="truncate">${esc(dep.name)}</span><button type="button" class="text-[#98a2b3] hover:text-[#b42318] font-semibold leading-none" aria-label="Remove dependency on ${esc(dep.name)}" onclick="removeDocDep(${i},'${dep.id}')">×</button></span>`;
+        }).join('')}</div>
+        ${DOC_TASKS.some(x=>x.id!==t.id&&!(t.depends_on||[]).includes(x.id))?`<select class="mt-1 px-1.5 py-0.5 text-xs max-w-[170px]" aria-label="Add a dependency" onchange="addDocDep(${i},this.value)">
+          <option value="">+ depends on…</option>${DOC_TASKS.filter(x=>x.id!==t.id&&!(t.depends_on||[]).includes(x.id)).map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join('')}</select>`:''}
+      </td>
+      <td class="py-2 text-xs text-[#475467] min-w-[260px]">${esc(t.rationale||'')}${t.source?`<div class="text-[#98a2b3] mt-0.5 truncate max-w-[300px]" title="${esc(t.source)}">From: ${esc(t.source)}</div>`:''}${t.error?`<div class="text-rose-600 font-medium">${esc(t.error)}</div>`:''}${warn?`<div class="text-amber-700">${esc(warn)}</div>`:''}${t.fieldError&&!t.fieldError.includes('deadline')?`<div class="text-rose-600 font-medium">${esc(t.fieldError)}</div>`:''}</td>
     </tr>`;
   }).join('');
-  const banner=(extraWarn||[]).map(w=>`<div class="text-amber-200 text-sm mb-2">${esc(w)}</div>`).join('');
-  $('docWizard').innerHTML=`<div>
+  const banner=(extraWarn||[]).map(w=>`<div class="note note-warn mb-2">${esc(w)}</div>`).join('');
+  $('docWizard').innerHTML=`<div class="panel">
     ${banner}
-    <p class="text-sm text-slate-300 mb-3">${esc(summary||'')}</p>
+    <div class="flex flex-wrap items-center justify-between gap-3 mb-3">
+      <p class="text-sm text-[#344054] font-medium">${esc(summary||'')}</p>
+      <label class="flex items-center gap-2 text-xs text-[#475467]">Plan as
+        <select id="docMethod" class="px-2 py-1 text-xs" onchange="DOC_METHOD=this.value">
+          <option value="waterfall" ${DOC_METHOD==='waterfall'?'selected':''}>Waterfall — requirements, design, build, SIT, UAT, go-live</option>
+          <option value="simple" ${DOC_METHOD==='simple'?'selected':''}>Simple — every role for the whole package</option>
+        </select></label>
+    </div>
     <div class="overflow-x-auto">
-      <table class="w-full text-sm">
-        <thead><tr class="text-slate-500 text-left text-xs">
-          <th class="py-1 font-medium">Duyệt</th><th class="font-medium">Gói việc</th><th class="font-medium">Nhân sự</th>
-          <th class="font-medium">Tuần</th><th class="font-medium">Hạn</th><th class="font-medium">Ưu tiên</th><th class="font-medium">Phụ thuộc</th><th class="font-medium">Lý do tách</th>
+      <table class="tbl">
+        <thead><tr>
+          <th class="py-1 font-semibold">Approve</th><th class="font-semibold">Work package</th><th class="font-semibold">Staffing</th>
+          <th class="font-semibold">Weeks</th><th class="font-semibold">Deadline</th><th class="font-semibold">Priority</th><th class="font-semibold" title="Stage due dates (waterfall only). Read from the document, never guessed">Stage dates</th><th class="font-semibold">Depends on</th><th class="font-semibold">Why this package</th>
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>
     <div class="mt-3 flex gap-2">
-      <button onclick="approveTasks()" class="btn btn-ok py-1 px-3 text-sm">Duyệt chia việc, xếp người</button>
-      <button onclick="DOC_TASKS=[];$('docWizard').innerHTML='';$('docStepLabel').textContent='Bước 1 / 2'" class="btn btn-ghost py-1 px-3 text-sm">Hủy</button>
+      <button onclick="approveTasks()" class="btn btn-primary">Approve split, staff it</button>
+      <button onclick="harvestDocTasks();DOC_TASKS.push(blankTask());renderDocTasks('Add a package by hand')" class="btn btn-ghost">Add package</button>
+      <button onclick="DOC_TASKS=[];$('docWizard').innerHTML='';$('docStepLabel').textContent='Step 1 / 2'" class="btn btn-ghost">Cancel</button>
     </div>
   </div>`;
 }
@@ -784,10 +1481,15 @@ function harvestDocTasks(){
     const t=DOC_TASKS[+el.dataset.i]; const v=el.value;
     t.priority=v===''?null:+v;
   });
-  document.querySelectorAll('.docDep').forEach(el=>{
-    const t=DOC_TASKS[+el.dataset.i];
-    t.depends_on=el.value?[el.value]:[];
+  document.querySelectorAll('.docReq').forEach(el=>{
+    const req=parseReq(el.value);
+    if(Object.keys(req).length) DOC_TASKS[+el.dataset.i].required=req;
   });
+  [['docUat','uat'],['docLive','deploy']].forEach(([cls,stage])=>document.querySelectorAll('.'+cls).forEach(el=>{
+    const t=DOC_TASKS[+el.dataset.i]; t.milestones={...(t.milestones||{})};
+    if(el.value) t.milestones[stage]=el.value; else delete t.milestones[stage];
+  }));
+  if($('docMethod')) DOC_METHOD=$('docMethod').value;
 }
 
 function validateDocTasks(){
@@ -797,16 +1499,19 @@ function validateDocTasks(){
     t.fieldError='';
     if(!t.include) return;
     if(!Number.isInteger(t.duration_weeks) || t.duration_weeks<1){
-      t.fieldError='số tuần phải là số nguyên ≥ 1'; ok=false;
+      t.fieldError='weeks must be a whole number ≥ 1'; ok=false;
     }
     if(!Number.isInteger(t.priority) || t.priority<1 || t.priority>5){
-      t.fieldError=(t.fieldError?t.fieldError+'; ':'')+'ưu tiên phải từ 1 đến 5'; ok=false;
+      t.fieldError=(t.fieldError?t.fieldError+'; ':'')+'priority must be 1 to 5'; ok=false;
     }
     if(t.deadline && today && t.deadline < today){
-      t.fieldError='hạn đã qua — chọn ngày từ hôm nay'; ok=false;
+      t.fieldError='deadline is in the past — pick today or later'; ok=false;
     }
     if(!t.deadline){
-      t.fieldError=(t.fieldError?t.fieldError+'; ':'')+'hạn bắt buộc'; ok=false;
+      t.fieldError=(t.fieldError?t.fieldError+'; ':'')+'deadline is required'; ok=false;
+    }
+    if(Object.values(t.milestones||{}).some(d=>today && d<today)){
+      t.fieldError=(t.fieldError?t.fieldError+'; ':'')+'a stage date is in the past'; ok=false;
     }
   });
   return ok;
@@ -815,33 +1520,37 @@ function validateDocTasks(){
 async function approveTasks(){
   harvestDocTasks();
   if(!validateDocTasks()){
-    renderDocTasks('Sửa các ô đỏ rồi duyệt lại');
+    renderDocTasks('Fix the red fields and approve again');
     return;
   }
   const chosen=DOC_TASKS.filter(t=>t.include && !t.error && t.name);
-  if(!chosen.length){ $('docWizard').insertAdjacentHTML('afterbegin','<div class="text-rose-300 text-sm mb-2">Chọn ít nhất một gói việc hợp lệ.</div>'); return; }
+  if(!chosen.length){ $('docWizard').insertAdjacentHTML('afterbegin','<div class="note note-bad mb-2">Select at least one valid work package.</div>'); return; }
   clearErrors();
-  $('docStepLabel').textContent='Bước 2 / 2 — đang kiểm tra sức chứa…';
-  $('docWizard').innerHTML='<div class="text-slate-400 text-sm">Solver đang xếp người theo lịch trống và sức chứa…</div>';
+  $('docStepLabel').textContent='Step 2 / 2 — checking capacity…';
+  $('docWizard').innerHTML='<div class="loading">Solver is staffing by availability and capacity…</div>';
   const stamp=Date.now()%100000;
   const idMap={};
   const projects=chosen.map((t,i)=>{
     const id=`jdoc_${stamp}_${i}`;
     idMap[t.id]=id;
+    const staged=DOC_METHOD==='waterfall' && t.duration_weeks>=4;   // shorter: one block (methodology.MIN_WEEKS)
+    const ms=staged?(t.milestones||{}):{};
     return {
       id, name: t.name, required: t.required||{},
       duration_weeks: t.duration_weeks,
       deadline: t.deadline, priority: t.priority,
       depends_on: t.depends_on||[],
+      method: DOC_METHOD,
+      ...(Object.keys(ms).length?{milestones:ms}:{}),
     };
   });
   projects.forEach(p=>{ p.depends_on=(p.depends_on||[]).map(d=>idMap[d]).filter(Boolean); });
   const r=await post('/api/propose-staff',{projects});
   if(r.error){
-    $('docWizard').innerHTML=`<div class="text-rose-300 text-sm">${esc(Array.isArray(r.error)?r.error.join('; '):r.error)}</div>`;
-    $('docStepLabel').textContent='Bước 1 / 2 — duyệt chia việc';
+    $('docWizard').innerHTML=`<div class="note note-bad">${esc(Array.isArray(r.error)?r.error.join('; '):r.error)}</div>`;
+    $('docStepLabel').textContent='Step 1 / 2 — review the split';
     renderDocTasks('');
-    $('docWizard').insertAdjacentHTML('afterbegin', `<div class="text-rose-300 text-sm mb-2">${esc(Array.isArray(r.error)?r.error.join('; '):r.error)}</div>`);
+    $('docWizard').insertAdjacentHTML('afterbegin', `<div class="note note-bad mb-2">${esc(Array.isArray(r.error)?r.error.join('; '):r.error)}</div>`);
     return;
   }
   DOC_STAFF=r;
@@ -850,52 +1559,57 @@ async function approveTasks(){
 
 function renderDocStaff(){
   const r=DOC_STAFF; if(!r) return;
-  $('docStepLabel').textContent='Bước 2 / 2 — duyệt phân công';
+  $('docStepLabel').textContent='Step 2 / 2 — review staffing';
   const asg=(r.assignments||[]).map(a=>{
     const squad=(a.squad||[]).map(s=>`${s.role}: ${(s.people||[]).join(', ')}`).join(' · ');
-    const late=a.risk==='late'?`<span class="chip bg-rose-500/20 text-rose-300">TRỄ${a.days_left!=null?' '+(-a.days_left)+' ngày':''}</span>`:'';
-    const why=a.why?`<div class="text-xs text-slate-400 mt-0.5">${esc(a.why)}</div>`:'';
-    return `<tr class="border-t border-slate-800">
-      <td class="py-2 font-medium">${esc(a.name)}</td>
-      <td class="py-2 text-xs">${DATA&&DATA.week_dates&&DATA.week_dates[a.start_week]?DATA.week_dates[a.start_week].slice(5):'tuần '+a.start_week}</td>
-      <td class="py-2 text-xs">${esc(squad)}</td>
+    const late=a.risk==='late'?`<span class="chip pill-bad">${lateOf(a)}d late</span>`:'';
+    const why=a.why?`<div class="text-xs text-[#667085] mt-0.5">${esc(a.why)}</div>`:'';
+    return `<tr>
+      <td class="py-2 font-semibold text-[#101828]">${esc(a.name)}</td>
+      <td class="py-2 text-xs text-[#344054]">${DATA&&DATA.week_dates&&DATA.week_dates[a.start_week]?fmtD(DATA.week_dates[a.start_week]):'week '+a.start_week}</td>
+      <td class="py-2 text-xs text-[#344054]">${esc(squad)}</td>
       <td class="py-2">${late}${why}</td>
     </tr>`;
   }).join('');
-  const un=(r.unstaffable||[]).map(u=>`<tr class="border-t border-slate-800"><td class="py-2 font-medium">${esc(u.name)}</td><td colspan="3" class="text-amber-200 text-xs">${esc(u.reason)}</td></tr>`).join('');
-  const notes=(r.notes||[]).map(n=>`<div class="text-sm text-slate-300">• ${esc(n)}</div>`).join('');
+  const un=(r.unstaffable||[]).map(u=>`<tr><td class="py-2 font-semibold text-[#101828]">${esc(u.name)}</td><td colspan="3" class="text-amber-700 font-medium text-xs">${esc(u.reason)}</td></tr>`).join('');
+  const notes=(r.notes||[]).map(n=>`<div class="text-sm text-[#344054]">• ${esc(n)}</div>`).join('');
   const dlt=r.delta||{projects:[],summary:'',causes:[]};
-  const deltaRows=(dlt.projects||[]).filter(p=>p.changed).map(p=>{
-    const late=s=>String(s).startsWith('TRỄ')||s==='không xếp được';
-    return `<tr class="border-t border-slate-800">
-      <td class="py-1 font-medium">${esc(p.name)}</td>
-      <td class="py-1 text-xs">${esc(p.before_squad)}<div class="${late(p.before_status)?'text-rose-400':'text-slate-500'}">${esc(p.before_status)}</div></td>
-      <td class="py-1 text-xs">${esc(p.after_squad)}<div class="${late(p.after_status)?'text-rose-400':'text-emerald-400'}">${esc(p.after_status)}</div></td>
+  const oldRows=(dlt.projects||[]).filter(p=>!p.is_new);
+  const late=s=>String(s).startsWith('LATE')||s==='unstaffable';
+  const md=fmtD;
+  const deltaRows=oldRows.filter(p=>p.changed).map(p=>{
+    const startChg=p.before_start!==p.after_start || p.before_start_date!==p.after_start_date;
+    const startLine=`<div class="text-xs ${startChg?'text-amber-700 font-medium':'text-[#667085]'}">start ${esc(md(p.before_start_date))} → ${esc(md(p.after_start_date))}</div>`;
+    return `<tr>
+      <td class="py-1.5 font-semibold text-[#101828]">${esc(p.name)}${startLine}</td>
+      <td class="py-1.5 text-xs text-[#344054]">${esc(p.before_squad)}<div class="${late(p.before_status)?'text-rose-600 font-semibold':'text-[#667085]'}">${esc(p.before_status)}</div></td>
+      <td class="py-1.5 text-xs text-[#344054]">${esc(p.after_squad)}<div class="${late(p.after_status)?'text-rose-600 font-semibold':'text-emerald-600 font-semibold'}">${esc(p.after_status)}</div></td>
+      <td class="py-1.5 pl-2 text-xs text-[#344054]">${reasonList(p.reason)}</td>
     </tr>`;
   }).join('');
-  const causes=(dlt.causes||[]).map(c=>`<div class="text-sm text-slate-300">• ${esc(c)}</div>`).join('');
+  const oldUnchanged=oldRows.length && oldRows.every(p=>!p.changed);
   const nUn=(r.unstaffable||[]).length;
-  $('docWizard').innerHTML=`<div>
-    <p class="help mb-3">Phân công cũ được giữ nguyên (đóng băng). Gói mới lấp chỗ trống. Bảng dưới là toàn bộ kế hoạch trước/sau.</p>
-    ${notes?`<div class="mb-3 bg-slate-800/40 rounded-lg p-3">${notes}</div>`:''}
-    ${causes?`<div class="mb-3 bg-slate-800/40 rounded-lg p-3">${causes}</div>`:''}
-    <div class="section-title mb-2">Gói mới</div>
-    <table class="w-full text-sm mb-4">
-      <thead><tr class="text-slate-500 text-left text-xs">
-        <th class="py-1 font-medium">Gói việc</th><th class="font-medium">Bắt đầu</th><th class="font-medium">Người</th><th></th>
+  const newBody=asg+un;
+  $('docWizard').innerHTML=`<div class="panel">
+    <p class="help mb-3">${oldUnchanged?'Existing assignments are kept (frozen). New packages fill the gaps.':'Some existing projects change — see the table below.'}</p>
+    ${notes?`<div class="mb-3 bg-[#f9fafb] border border-[#e4e7ec] rounded-lg p-3">${notes}</div>`:''}
+    <div class="section-title mb-2">New packages</div>
+    <table class="tbl mb-4">
+      <thead><tr>
+        <th class="py-1 font-semibold">Work package</th><th class="font-semibold">Start</th><th class="font-semibold">People</th><th></th>
       </tr></thead>
-      <tbody>${asg}${un||'<tr><td class="py-2 text-slate-500 text-xs" colspan="4">Không có gói mới xếp được.</td></tr>'}</tbody>
+      <tbody>${newBody||'<tr><td class="py-2 text-[#667085] text-xs" colspan="4">No new package could be staffed.</td></tr>'}</tbody>
     </table>
-    <div class="section-title mb-2">Trước / sau (cả kế hoạch cũ)</div>
-    <p class="help mb-2">${esc(dlt.summary||'')}</p>
-    <table class="w-full text-sm">
-      <thead><tr class="text-slate-500 text-left text-xs"><th class="py-1 font-medium">Dự án</th><th class="font-medium">Trước</th><th class="font-medium">Sau</th></tr></thead>
-      <tbody>${deltaRows||'<tr><td class="py-2 text-slate-500 text-xs" colspan="3">Kế hoạch cũ không đổi.</td></tr>'}</tbody>
+    <div class="section-title mb-2">Before / after (existing plan)</div>
+    <p class="help mb-2">${esc(dlt.summary||'')}${oldUnchanged?'':''}</p>
+    <table class="tbl">
+      <thead><tr><th class="py-1 font-semibold">Project</th><th class="font-semibold">Before</th><th class="font-semibold">After</th><th class="font-semibold pl-2">What changed</th></tr></thead>
+      <tbody>${deltaRows||'<tr><td class="py-2 text-[#667085] text-xs" colspan="4">Existing plan unchanged.</td></tr>'}</tbody>
     </table>
-    ${nUn?`<div class="mt-3 text-amber-200 text-sm">${nUn} gói không xếp được. Duyệt vẫn ghi chúng vào danh sách “không xếp được”, không đổi người ở project cũ.</div>`:''}
+    ${nUn?`<div class="mt-3 note note-warn">${nUn} package(s) could not be staffed. Approving still records them as “unstaffable” and does not change people on existing projects.</div>`:''}
     <div class="mt-3 flex gap-2">
-      <button onclick="applyDocStaff()" class="btn btn-ok py-1 px-3 text-sm">${nUn?'Duyệt — kể cả gói không xếp được':'Duyệt phân công'}</button>
-      <button onclick="renderDocTasks('Quay lại chia việc')" class="btn btn-ghost py-1 px-3 text-sm">Sửa chia việc</button>
+      <button onclick="applyDocStaff()" class="btn btn-primary">${nUn?'Approve — including unstaffable packages':'Approve staffing'}</button>
+      <button onclick="renderDocTasks('Back to the split')" class="btn btn-ghost">Edit the split</button>
     </div>
   </div>`;
 }
@@ -903,14 +1617,14 @@ function renderDocStaff(){
 async function applyDocStaff(){
   if(!DOC_STAFF || !(DOC_STAFF.projects||[]).length) return;
   const nUn=(DOC_STAFF.unstaffable||[]).length;
-  if(nUn && !confirm(`${nUn} gói không xếp được sẽ vào kế hoạch như “không xếp được”. Project cũ giữ nguyên. Tiếp tục?`)) return;
-  $('docWizard').innerHTML='<div class="text-slate-400 text-sm">Đang ghi vào kế hoạch…</div>';
+  if(nUn && !confirm(`${nUn} package(s) will be added as “unstaffable”. Existing projects stay as they are. Continue?`)) return;
+  $('docWizard').innerHTML='<div class="loading">Saving to the plan…</div>';
   const d=await replan({add_projects: DOC_STAFF.projects, freeze_existing:true});
   if(d && !d.error){
-    const extra=nUn?` ${nUn} gói không xếp được, đã ghi rõ trong bảng.`:'';
-    $('docWizard').innerHTML=`<div class="border-l-2 border-emerald-500 bg-emerald-500/10 rounded-r-lg px-3 py-2 text-sm">Đã duyệt. Phân công cũ giữ nguyên.${extra}</div>`;
+    const extra=nUn?` ${nUn} package(s) unstaffable, marked in the table.`:'';
+    $('docWizard').innerHTML=`<div class="note note-ok">Approved. Existing assignments kept.${extra}</div>`;
     $('docInput').value='';
-    $('docStepLabel').textContent='Bước 1 / 2';
+    $('docStepLabel').textContent='Step 1 / 2';
     DOC_TASKS=[]; DOC_STAFF=null;
   } else {
     renderDocStaff();
@@ -918,7 +1632,8 @@ async function applyDocStaff(){
 }
 
 $('btnAssign').onclick = assign;
-$('btnReset').onclick=reset;
+$('btnReoptimize').onclick = doReoptimize;
+$('btnReset').onclick = reset;
 assign();
 </script>
 </body>

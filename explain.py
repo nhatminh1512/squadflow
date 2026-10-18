@@ -18,22 +18,31 @@ def explain_decision(plan: Plan, people: list[Person], meta: dict) -> str:
     level = meta["chosen_level"]
     n_eligible = meta["n_eligible"]
     if meta.get("overloaded"):
-        return (f"{person_name} ({role} {level}) — QUÁ TẢI: không còn ai đủ "
-                f"{role}≥{min_level} trống lịch")
+        return (f"{person_name} ({role} {level}) — OVERLOADED: nobody else with "
+                f"{role}≥{min_level} is free")
     if n_eligible == 1:
-        return f"{person_name} ({role} {level}) — người duy nhất đủ {role}≥{min_level}"
+        return f"{person_name} ({role} {level}) — the only person with {role}≥{min_level}"
     if meta.get("least_qualified") or (
         meta.get("solver") != "cp_sat" and not meta.get("overloaded")
     ):
-        return (f"{person_name} ({role} {level}) — đủ chuẩn, chọn người ít kinh nghiệm "
-                f"nhất trong {n_eligible} người (dành senior cho việc khó)")
-    return (f"{person_name} ({role} {level}) — đủ {role}≥{min_level}, "
-            f"chọn bởi tối ưu toàn cục trong {n_eligible} người "
-            f"(cân tải / giữ phân công cũ / hạn chót)")
+        return (f"{person_name} ({role} {level}) — qualified; least senior of "
+                f"{n_eligible} candidates (seniors kept for harder work)")
+    return (f"{person_name} ({role} {level}) — has {role}≥{min_level}; "
+            f"picked by the global optimizer among {n_eligible} candidates "
+            f"(load balance / keep previous squad / deadlines)")
+
+
+EMPTY_PLAN_EXPLANATION = (
+    "There are no projects in the plan to assign yet. "
+    "Add a project, or press Reset to restore the sample data."
+)
 
 
 def explain_plan(plan: Plan, people: list[Person], projects: list[Project],
                  risks: list[ProjectRisk] | None = None) -> str:
+    if not projects or (not plan.assignments and not plan.unstaffable):
+        return EMPTY_PLAN_EXPLANATION
+
     pname = {p.id: p.name for p in projects}
     lines: list[str] = []
 
@@ -43,22 +52,22 @@ def explain_plan(plan: Plan, people: list[Person], projects: list[Project],
 
     late = [r for r in (risks or []) if r.risk == "late"]
     if late:
-        lines.append("DỰ ÁN TRỄ HẠN:")
+        lines.append("LATE PROJECTS:")
         for r in late:
             days = r.days_left if r.days_left is not None else 0
-            lines.append(f"  • {r.project.name} — TRỄ {abs(days)} ngày "
-                         f"(xong {r.done_date}, hạn {r.project.deadline.isoformat()})")
+            lines.append(f"  • {r.project.name} — LATE by {abs(days)} days "
+                         f"(done {r.done_date}, deadline {r.project.deadline.isoformat()})")
         lines.append("")
 
     for a in sorted(plan.assignments, key=lambda x: x.start_week):
-        lines.append(f"**{pname.get(a.project_id, a.project_id)}** (tuần {a.start_week}):")
+        lines.append(f"**{pname.get(a.project_id, a.project_id)}** (week {a.start_week}):")
         for d in by_project.get(a.project_id, []):
             lines.append(f"  • {explain_decision(plan, people, d)}")
 
     for pid, reason in plan.unstaffable:
-        lines.append(f"**{pname.get(pid, pid)}** — KHÔNG XẾP ĐƯỢC: {reason}")
+        lines.append(f"**{pname.get(pid, pid)}** — UNSTAFFABLE: {reason}")
 
-    return "\n".join(lines)
+    return "\n".join(lines) if lines else EMPTY_PLAN_EXPLANATION
 
 
 def explain_plan_llm(plan: Plan, people: list[Person], projects: list[Project],
@@ -68,18 +77,29 @@ def explain_plan_llm(plan: Plan, people: list[Person], projects: list[Project],
     The facts come from explain_plan (the solver log); the LLM only phrases,
     so it cannot invent a reason that isn't there.
     """
+    if not projects or (not plan.assignments and not plan.unstaffable):
+        return EMPTY_PLAN_EXPLANATION
     import llm
     facts = explain_plan(plan, people, projects, risks)
+    if not facts.strip() or facts == EMPTY_PLAN_EXPLANATION:
+        return EMPTY_PLAN_EXPLANATION
     user = (
-        "Dưới đây là log quyết định của bộ xếp lịch (dữ kiện có thật). "
-        "Viết lại thành một đoạn giải thích tự nhiên, ngắn gọn, bằng tiếng Việt. "
-        "Chỉ dùng đúng dữ kiện trong log, không bịa thêm. "
-        "Nếu log có mục DỰ ÁN TRỄ HẠN thì phải nêu tên các dự án đó và số ngày trễ. "
-        "Không được nói 'đều không quá tải' hay 'mọi dự án đúng hạn' nếu log ghi có dự án TRỄ. "
-        "Không được nói ai được chọn vì 'ít kinh nghiệm nhất' trừ khi log ghi đúng cụm đó.\n\n"
+        "Below is the scheduler's decision log (real facts). "
+        "Rewrite it as a short, natural explanation in English. "
+        "Use only the facts in the log; do not invent anything. "
+        "If the log has a LATE PROJECTS section, name those projects and how many days late. "
+        "Never say 'nobody is overloaded' or 'everything is on time' if the log lists a LATE project. "
+        "Never say someone was picked as 'least senior' unless the log says exactly that.\n\n"
         + facts
     )
-    return llm.complete([
-        {"role": "system", "content": "Bạn là trợ lý giải thích kế hoạch phân công nhân sự, nói ngắn gọn, chính xác, không bịa."},
-        {"role": "user", "content": user},
-    ], timeout=40)
+    try:
+        text = llm.complete([
+            {"role": "system", "content": "You explain staffing plans. Be brief and precise, and never make things up."},
+            {"role": "user", "content": user},
+        ], timeout=20, fast=True, max_tokens=800)
+        if text and str(text).strip():
+            return text
+    except Exception:
+        pass
+    return facts
+
