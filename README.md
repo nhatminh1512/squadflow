@@ -41,6 +41,12 @@ The container publishes the same port: `http://localhost:8091`.
 - Changes: ask a what-if, paste a document to split into work packages, or edit leave, deadlines, people, and projects by hand.
 - Re-optimize, then review the before/after table before you approve.
 
+Long documents are read in parts. A part that fails is listed in red with its
+reason and a **Read this part again** button; successful parts come from the
+cache on a retry. Dependencies are taken only from ordering sentences in the
+document — the model's guesses appear as dashed **AI guess** chips and are not
+sent to the solver unless you tick them.
+
 What-if text, document import, and the AI summary need `DEEPSEEK_API_KEY`. Assignment, load, and the rest of the plan do not.
 
 ## CLI

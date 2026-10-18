@@ -9,7 +9,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import random
 import re
+import socket
 import sys
 import threading
 import time
@@ -21,12 +23,12 @@ from pathlib import Path
 SKILLS_DIR = Path(__file__).resolve().parent / "skills"
 
 DEFAULT_MODEL = "deepseek-v4-pro"
-FAST_MODEL = "deepseek-chat"
+FAST_MODEL = "deepseek-flash"
 DEFAULT_BASE = "https://api.deepseek.com/v1"
 
 _CACHE: dict[str, dict] = {}
 _CACHE_LOCK = threading.Lock()
-_CACHE_MAX = 48
+_CACHE_MAX = 256
 
 
 def _env() -> dict[str, str]:
@@ -44,9 +46,39 @@ def _env() -> dict[str, str]:
     return env
 
 
+_RETRY_BACKOFF = (2.0, 4.0, 8.0)
+
+
+def _retry_after(exc: urllib.error.HTTPError) -> float | None:
+    """Seconds from a Retry-After header (HTTP-date is ignored: use the backoff)."""
+    try:
+        raw = exc.headers.get("Retry-After") if exc.headers else None
+    except Exception:
+        raw = None
+    if not raw:
+        return None
+    try:
+        return max(0.0, float(str(raw).strip()))
+    except (TypeError, ValueError):
+        return None
+
+
+def _sleep_before_retry(seconds: float, deadline: float | None, why: str) -> None:
+    if deadline is not None:
+        seconds = min(seconds, max(0.0, deadline - time.monotonic()))
+        if seconds <= 0:
+            raise TimeoutError(f"AI call timed out ({why})")
+    seconds = max(0.0, seconds)
+    sys.stderr.write(f"LLM retry: {why}; waiting {seconds:.1f}s\n")
+    sys.stderr.flush()
+    if seconds:
+        time.sleep(seconds)
+
+
 def complete(messages: list[dict], temperature: float = 0.2, max_tokens: int = 4000,
              json_mode: bool = False, timeout: int = 60, fast: bool = False,
-             seed: int | None = None, model: str | None = None) -> str:
+             seed: int | None = None, model: str | None = None,
+             deadline: float | None = None) -> str:
     env = _env()
     key = env.get("DEEPSEEK_API_KEY")
     if not key:
@@ -57,7 +89,16 @@ def complete(messages: list[dict], temperature: float = 0.2, max_tokens: int = 4
         chosen = env.get("DEEPSEEK_FAST_MODEL") or FAST_MODEL
     else:
         chosen = env.get("DEEPSEEK_MODEL") or DEFAULT_MODEL
+    default_model = env.get("DEEPSEEK_MODEL") or DEFAULT_MODEL
     base = (env.get("DEEPSEEK_BASE_URL") or DEFAULT_BASE).rstrip("/")
+
+    def _timeout() -> int:
+        if deadline is None:
+            return timeout
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise TimeoutError("AI call timed out")
+        return max(1, int(min(timeout, left)))
 
     def _call(use_json: bool, which: str) -> str:
         body: dict = {
@@ -79,7 +120,7 @@ def complete(messages: list[dict], temperature: float = 0.2, max_tokens: int = 4
                 data=json.dumps(body).encode(),
                 headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
             )
-            with urllib.request.urlopen(req, timeout=timeout) as r:
+            with urllib.request.urlopen(req, timeout=_timeout()) as r:
                 data = json.loads(r.read())
             msg = (data.get("choices") or [{}])[0].get("message") or {}
             content = msg.get("content") or ""
@@ -98,39 +139,81 @@ def complete(messages: list[dict], temperature: float = 0.2, max_tokens: int = 4
             )
             sys.stderr.flush()
 
-    try:
-        return _call(json_mode, chosen)
-    except urllib.error.HTTPError as e:
-        code = e.code
+    rate_retries = 0
+    timeout_retries = 0
+    while True:
         try:
-            e.read()
-        except Exception:
-            pass
-        # fast model missing → fall back to the default (once)
-        if fast and chosen != (env.get("DEEPSEEK_MODEL") or DEFAULT_MODEL) and code in (400, 404):
-            return _call(json_mode, env.get("DEEPSEEK_MODEL") or DEFAULT_MODEL)
-        if json_mode:
-            return _call(False, chosen)
-        raise
+            return _call(json_mode, chosen)
+        except urllib.error.HTTPError as e:
+            code = e.code
+            try:
+                e.read()
+            except Exception:
+                pass
+            # fast model missing → fall back to the default (once)
+            if fast and chosen != default_model and code in (400, 404):
+                chosen = default_model
+                return _call(json_mode, chosen)
+            # 429 / 5xx: honour Retry-After, then 2s / 4s / 8s with jitter.
+            # Never retry these immediately as plain JSON: that is blocked too.
+            if code == 429 or 500 <= code < 600:
+                if rate_retries >= len(_RETRY_BACKOFF):
+                    raise
+                wait = _retry_after(e)
+                if wait is None:
+                    wait = _RETRY_BACKOFF[rate_retries] + random.uniform(0, 0.5)
+                rate_retries += 1
+                _sleep_before_retry(wait, deadline, f"HTTP {code} (attempt {rate_retries + 1})")
+                continue
+            if json_mode:
+                # the provider rejected response_format: one plain retry
+                return _call(False, chosen)
+            raise
+        except (TimeoutError, socket.timeout):
+            timeout_retries += 1
+            if timeout_retries <= 1:
+                _sleep_before_retry(2.0 + random.uniform(0, 0.5), deadline, "timeout")
+                continue
+            raise
+        except urllib.error.URLError as e:
+            timeout_retries += 1
+            if timeout_retries <= 1:
+                _sleep_before_retry(2.0 + random.uniform(0, 0.5), deadline,
+                                    f"connection ({e.reason})")
+                continue
+            raise
 
 
 def complete_json(messages: list[dict], temperature: float = 0.0,
-                  max_tokens: int = 2000, attempts: int = 2, timeout: int = 60) -> dict:
-    """JSON extract on the fast model. Retry only if the first call failed quickly."""
+                  max_tokens: int = 2000, attempts: int = 2, timeout: int = 60,
+                  total_timeout: float | None = None,
+                  deadline: float | None = None) -> dict:
+    """JSON extract on the fast model, with one shared time budget for all
+    attempts (a long document must not hang one part forever)."""
+    if deadline is None and total_timeout:
+        deadline = time.monotonic() + total_timeout
     last: Exception | None = None
-    t0 = time.time()
-    for i in range(max(1, attempts)):
+    for _ in range(max(1, attempts)):
+        call_timeout = timeout
+        if deadline is not None:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                break
+            call_timeout = max(1, int(min(timeout, left)))
         try:
             raw = complete(
                 messages, temperature=temperature, max_tokens=max_tokens,
-                json_mode=True, timeout=timeout, fast=True, seed=1,
+                json_mode=True, timeout=call_timeout, fast=True, seed=1,
+                deadline=deadline,
             )
             return _parse_json(raw)
         except Exception as e:
             last = e
-            if time.time() - t0 > timeout * 0.7:
+            if deadline is not None and time.monotonic() >= deadline:
                 break
-    raise last or RuntimeError("AI did not return JSON")
+    if last is None:
+        last = TimeoutError("AI call timed out")
+    raise last
 
 
 def _cache_key(kind: str, text: str, today: date) -> str:
@@ -150,8 +233,25 @@ def cache_put(kind: str, text: str, today: date, value: dict) -> None:
         _CACHE[_cache_key(kind, text, today)] = value
 
 
-def _friendly_ai_error(_exc: Exception | None = None) -> str:
-    return "Could not read the AI response. Try shortening the input and run again."
+def _friendly_ai_error(exc: Exception | None = None) -> str:
+    """A short reason a person can act on — shown per failed document part."""
+    if isinstance(exc, urllib.error.HTTPError):
+        code = exc.code
+        if code == 429:
+            return "AI request limit reached (HTTP 429) — try again in a minute"
+        if 500 <= code < 600:
+            return f"AI service unavailable (HTTP {code}) — try again shortly"
+        return f"AI rejected the request (HTTP {code})"
+    if isinstance(exc, (TimeoutError, socket.timeout)):
+        return "AI call timed out — try again or read the document in smaller parts"
+    if isinstance(exc, json.JSONDecodeError):
+        return "AI returned invalid JSON — try again"
+    if isinstance(exc, urllib.error.URLError):
+        return "could not reach the AI service — check the connection and retry"
+    msg = str(exc or "").strip()
+    if msg and len(msg) <= 180:
+        return msg
+    return "Could not read the AI response — try again"
 
 
 def _load_skill(name: str) -> str:
@@ -427,8 +527,16 @@ def _counts_in_brief(text: str) -> dict[str, int]:
     t = text or ""
     for role, aliases in _ROLE_ALIASES.items():
         for al in aliases:
-            m = re.search(rf"\b(\d+)\s+{re.escape(al)}\b", t, flags=re.I)
+            m = re.search(
+                rf"\b(\d+)\s+(?:(?:senior|junior|mid|middle|lead|principal|sr|jr)\s+)?"
+                rf"{re.escape(al)}s?\b",
+                t, flags=re.I,
+            )
             if m:
+                # "level 4 PM" states a level, not four PMs
+                if re.search(r"(?:level|trình\s*độ|cấp)\s*[:=]?\s*$",
+                             t[max(0, m.start() - 16):m.start()], flags=re.I):
+                    continue
                 found[role] = int(m.group(1))
                 break
             m = re.search(
@@ -603,7 +711,9 @@ MERGE_SIM = 0.85             # two packages are the same deliverable only above 
 
 _HEADING = re.compile(
     r"^\s*(?:#{1,6}\s+\S"                                   # markdown heading
-    r"|\d+(?:\.\d+)*[\.\)]?\s+\S.{0,100}$"                 # 1. / 2.3 / 4.1.2 Title
+    r"|\d+(?:\.\d+)+[\.\)]?\s+\S.{0,100}$"                 # 2.3 / 4.1.2 Title
+    r"|\d+[\.\)]\s+\S.{0,100}$"                            # 1. / 2) Title
+    r"|\d+\s+(?-i:[A-ZÀ-Ỹ]).{0,100}$"                      # 1 Title (capitalised, no dot)
     r"|[IVXLC]+[\.\)]\s+\S"                                 # roman numerals
     r"|(?:phần|chương|mục|hạng\s*mục|giai\s*đoạn|section|chapter|part|module|phase|phụ\s*lục|appendix|annex)\s+[\w\.]+)",
     re.I)
@@ -612,20 +722,46 @@ _CAPS_LINE = re.compile(r"^\s*[A-ZÀ-Ỹ][A-ZÀ-Ỹ0-9 &/\-:]{3,80}$")
 # (cross-cutting requirements and contract terms shape every package but are none)
 _CONTEXT_ONLY = re.compile(r"phụ\s*lục|appendix|annex|thuật\s*ngữ|glossary|định\s*nghĩa|definitions?"
                            r"|tài\s*liệu\s*tham\s*khảo|references?|phi\s*chức\s*năng|non-?functional|\bnfrs?\b"
-                           r"|điều\s*khoản|terms\s*(?:and|&)\s*conditions|payment\s*terms|commercial\s*terms", re.I)
+                           r"|điều\s*khoản|terms\s*(?:and|&)\s*conditions|payment\s*terms|commercial\s*terms"
+                           r"|\b(?:rủi\s*ro|risks?|giả\s*định|assumptions?|ràng\s*buộc|constraints?)\b"
+                           r"|\bout\s*of\s*scope\b", re.I)
+# an intro / overview section describes the whole project; a package read there
+# is usually a duplicate or a fragment, never the best place to take values from
+# ("scope" is deliberately absent: many PRDs list their main packages under it)
+_OVERVIEW = re.compile(r"tổng\s*quan|\boverview\b|giới\s*thiệu|\bintroduction\b|mục\s*tiêu"
+                       r"|\bgoals?\b|\bobjectives?\b|bối\s*cảnh|\bbackground\b|\bcontext\b"
+                       r"|tóm\s*tắt|\bsummary\b", re.I)
 # a "package" with one of these names is a schedule or reference, not a deliverable
 _NOT_A_PACKAGE = re.compile(r"timeline|schedule|milestones?|roadmap|lịch\s*(?:trình|triển\s*khai|dự\s*án)|tiến\s*độ|\bmốc\b"
                             r"|release\s*plan|kế\s*hoạch\s*(?:triển\s*khai|tổng\s*thể)|glossary|thuật\s*ngữ|phụ\s*lục|appendix", re.I)
-# a name that is just a delivery stage (the waterfall template already plans it)
-_STAGE_NAME = re.compile(r"^\W*(?:\buat\b|\bsit\b|user acceptance|kiểm\s*thử\s*chấp\s*nhận|nghiệm\s*thu"
-                         r"|go[- ]?live|cut-?over|hypercare|triển\s*khai\s*chính\s*thức|bàn\s*giao)", re.I)
+# words that only describe a delivery stage; a name made only of these is not a package
+_STAGE_ONLY = re.compile(r"\buat\b|\bsit\b|user\s+acceptance|kiểm\s*thử\s*(?:chấp\s*nhận|tích\s*hợp)"
+                         r"|nghiệm\s*thu|go[- ]?live|cut-?over|hypercare|triển\s*khai\s*chính\s*thức"
+                         r"|bàn\s*giao|system\s+integration\s+test|\bbrd\b|\bsrs\b"
+                         r"|requirements?\s+(?:sign[- ]?off|freeze|baseline|approval)|chốt\s*yêu\s*cầu"
+                         r"|(?:phê\s*)?duyệt\s*yêu\s*cầu|design\s+(?:sign[- ]?off|freeze|approval)"
+                         r"|(?:chốt|phê\s*duyệt|duyệt)\s*thiết\s*kế|\bdeploy(?:ment)?\b"
+                         r"|triển\s*khai\s*chính\s*thức|vận\s*hành\s*chính\s*thức|đưa\s*vào\s*vận\s*hành", re.I)
+_STAGE_FILLER = re.compile(
+    r"\b(?:and|or|of|the|whole|entire|system|platform|và|hoặc|của|toàn|hệ\s*thống"
+    r"|toàn\s*hệ\s*thống|giai\s*đoạn|phase|stage|dự\s*án|project|chính\s*thức)\b"
+    r"|[&+/\-–—.,:;()\[\]…]", re.I)
+
+
+def _is_stage_name(name: str) -> bool:
+    """True when a package name is nothing but a delivery stage (UAT / go-live …)."""
+    rest = _STAGE_ONLY.sub(" ", name or "")
+    rest = _STAGE_FILLER.sub(" ", rest)
+    return not re.sub(r"\W+", "", rest)
+
+
 # cut order: packages the document marks as required for go-live are kept first
 _ESSENTIAL = re.compile(r"go[- ]?live|bắt\s*buộc|mandatory|required\s+(?:for|by)|must|\bphải\b|điều\s*kiện"
                         r"|contract|hợp\s*đồng|compliance|tuân\s*thủ|pci|regulat", re.I)
 
 
 def _clean_heading(line: str) -> str:
-    return re.sub(r"^\s*#+\s*", "", line).strip()[:120]
+    return re.sub(r"^\s*#+\s*", "", line).strip()
 
 
 def _heading_level(line: str) -> int:
@@ -639,9 +775,12 @@ def _heading_level(line: str) -> int:
 
 
 def _sections(text: str) -> list[dict]:
-    """Headings with their character span: [{title, level, start, end, context_only}].
+    """Headings with their character span:
+    [{title, level, start, end, context_only, overview, has_children}].
     The text before the first heading is a section with title ''. A section is
-    context-only when it, or a parent heading, is an appendix / glossary."""
+    context-only when it, or a parent heading, is an appendix / glossary, and
+    `overview` when it, or a parent heading, is an intro. `has_children` marks
+    a parent heading whose own span is only the section intro."""
     heads: list[tuple[int, str]] = []
     pos = 0
     for line in text.splitlines(keepends=True):
@@ -650,18 +789,26 @@ def _sections(text: str) -> list[dict]:
         pos += len(line)
     out: list[dict] = []
     if not heads or heads[0][0] > 0:
-        out.append({"title": "", "level": 0, "start": 0, "context_only": False})
+        out.append({"title": "", "level": 0, "start": 0, "context_only": False,
+                    "overview": False})
     ctx_level = None
+    ov_level = None
     for start, line in heads:
         lvl = _heading_level(line)
         if ctx_level is not None and lvl <= ctx_level:
             ctx_level = None                      # a sibling of the appendix: back to content
         if ctx_level is None and _CONTEXT_ONLY.search(line):
             ctx_level = lvl
+        if ov_level is not None and lvl <= ov_level:
+            ov_level = None                       # a sibling of the intro: back to content
+        if ov_level is None and _OVERVIEW.search(line):
+            ov_level = lvl
         out.append({"title": _clean_heading(line), "level": lvl, "start": start,
-                    "context_only": ctx_level is not None})
+                    "context_only": ctx_level is not None,
+                    "overview": ov_level is not None})
     for i, sec in enumerate(out):
         sec["end"] = out[i + 1]["start"] if i + 1 < len(out) else len(text)
+        sec["has_children"] = (i + 1 < len(out) and out[i + 1]["level"] > sec["level"])
     return [s for s in out if text[s["start"]:s["end"]].strip()]
 
 
@@ -679,15 +826,19 @@ def _section_at(secs: list[dict], pos: int) -> dict | None:
 
 
 def _document_parts(text: str, limit: int = CHUNK_CHARS) -> list[tuple[str, str, int]]:
-    """Pack consecutive content sections into parts of ≤ ~limit chars:
-    [(title, text, start offset)]. Appendix / glossary sections are skipped
-    (the outline still lists them). A section longer than the limit is split
-    on blank lines, then at sentence ends."""
+    """One part per heading section (split further only when a section is longer
+    than `limit`): [(title, text, start offset)]. Keeping the boundaries on
+    headings means adding a sentence only changes the part that holds it —
+    every other part keeps its text, its cache key and its package ids.
+    Appendix / glossary / risk sections are skipped (the outline still lists
+    them). A long section is split on blank lines, then at sentence ends."""
     pieces: list[tuple[str, str, int]] = []
     for sec in _sections(text):
         if sec["context_only"]:
             continue
         head, body, off = sec["title"], text[sec["start"]:sec["end"]].strip(), sec["start"]
+        if not body:
+            continue
         if len(body) <= limit:
             pieces.append((head, body, off))
             continue
@@ -696,7 +847,9 @@ def _document_parts(text: str, limit: int = CHUNK_CHARS) -> list[tuple[str, str,
             while len(para) > limit:
                 cut = para.rfind(". ", 0, limit)          # end of a sentence if possible
                 cut = cut + 1 if cut > limit // 2 else limit
-                pieces.append((head, para[:cut].strip(), off))
+                chunk = para[:cut].strip()
+                if chunk:
+                    pieces.append((head, chunk, off))
                 para = para[cut:].strip()
             if buf and len(buf) + len(para) + 2 > limit:
                 pieces.append((head, buf, off))
@@ -704,28 +857,23 @@ def _document_parts(text: str, limit: int = CHUNK_CHARS) -> list[tuple[str, str,
             buf = f"{buf}\n\n{para}" if buf else para
         if buf:
             pieces.append((head, buf, off))
-    parts: list[tuple[list[str], str, int]] = []
-    for head, body, off in pieces:
-        if parts and len(parts[-1][1]) + len(body) + 2 <= limit:
-            parts[-1] = (parts[-1][0] + [head], parts[-1][1] + "\n\n" + body, parts[-1][2])
-        else:
-            parts.append(([head], body, off))
-    # a title page or a one-line section is not worth its own model call
-    i = 0
-    while len(parts) > 1 and i < len(parts):
-        if len(parts[i][1]) < 1000:
-            j = i + 1 if i + 1 < len(parts) else i - 1
-            a, b = sorted((i, j))
-            parts[a:b + 1] = [(parts[a][0] + parts[b][0], parts[a][1] + "\n\n" + parts[b][1], parts[a][2])]
-            i = max(0, a - 1)
-            continue
-        i += 1
-    out = []
-    for heads, body, off in parts:
-        named = [h for h in heads if h]
-        title = named[0] if len(named) == 1 else (f"{named[0]} … {named[-1]}" if named else "")
-        out.append((title, body, off))
-    return out
+
+    def _heading_only(head: str, body: str) -> bool:
+        lines = [ln for ln in body.splitlines() if ln.strip()]
+        return len(lines) == 1 and _clean_heading(lines[0]) == head
+
+    # a title page / a lone heading is not worth its own model call: join the
+    # next section (or the previous one for a trailing heading)
+    while len(pieces) > 1:
+        i = next((i for i, (h, b, _) in enumerate(pieces) if h and _heading_only(h, b)), None)
+        if i is None:
+            break
+        j = i + 1 if i + 1 < len(pieces) else i - 1
+        a, b = sorted((i, j))
+        h1, b1, o1 = pieces[a]
+        h2, b2, _ = pieces[b]
+        pieces[a:b + 1] = [(h2 if i == a else h1, b1 + "\n\n" + b2, o1)]
+    return pieces
 
 
 _STAGE_WORDS = [
@@ -761,7 +909,11 @@ def _stage_milestones(text: str, today: date) -> dict[str, str]:
 
 
 def _call_part(skill: str, today: date, part: tuple, idx: int, n: int,
-               outline: str, total: int) -> dict:
+               outline: str, total: int, deadline: float | None = None) -> dict:
+    """One model call per document part. The prompt deliberately contains only
+    the part's own title/body and the outline (never its index or the total
+    size), so the same part keeps the same prompt - and the same cache key -
+    when an unrelated sentence is added elsewhere in the document."""
     title, body = part[0], part[1]
     # evidence lets code find where each package is in the document (source,
     # stage dates, dependency sentences) instead of trusting the model for it
@@ -771,15 +923,15 @@ def _call_part(skill: str, today: date, part: tuple, idx: int, n: int,
         user = f"Today is {today.isoformat()}.{evidence}\n\nDocument:\n{body}"
     else:
         user = (f"Today is {today.isoformat()}.\n\n"
-                f"This is part {idx} of {n} of a long document ({total:,} characters).\n"
                 f"Outline of the whole document:\n{outline}\n\n"
                 "Extract work packages only from THIS part. If a deliverable clearly "
                 f"continues one named elsewhere in the outline, use that same name.{evidence}\n\n"
-                f"Part {idx} — {title or 'untitled'}:\n{body}")
+                f"Part — {title or 'untitled'}:\n{body}")
     return complete_json(
         [{"role": "system", "content": skill + "\n\nReply with plain JSON only, no markdown."},
          {"role": "user", "content": user}],
         temperature=0.0, max_tokens=3500, attempts=2, timeout=60,
+        deadline=deadline,
     )
 
 
@@ -833,32 +985,218 @@ def _name_sim(a: str, b: str) -> float:
     return max(difflib.SequenceMatcher(None, na, nb).ratio(), jac, contained)
 
 
-def _merge_packages(tasks: list[dict]) -> list[dict]:
-    """The same deliverable read in two parts -> one package. Only when the
-    names are near-identical AND they come from the same section or need the
-    same roles; values take the max (never summed)."""
-    merged: list[dict] = []
-    for t in tasks:
-        twin = next((m for m in merged
-                     if not t.get("error") and not m.get("error")
-                     and _name_sim(m["name"], t["name"]) >= MERGE_SIM
-                     and (m.get("section") == t.get("section")
-                          or set(m.get("required") or {}) == set(t.get("required") or {}))), None)
-        if not twin:
-            merged.append(t)
+_LIST_LINE = re.compile(r"^\s*(?:[-*•+–—]|\d{1,3}[.)]|\([a-zA-Z0-9]+\))\s+")
+
+
+def _is_heading_line(line: str) -> bool:
+    return bool(line.strip() and (_HEADING.match(line) or _CAPS_LINE.match(line)))
+
+
+def _paragraph_span(text: str, pos: int, lo: int = 0, hi: int | None = None) -> tuple[int, int]:
+    """The paragraph or bullet around `pos`: blank lines bound a paragraph,
+    a list marker bounds a bullet. Used as a package's 'home' so stage dates
+    and headcounts are read from the package's own lines, not a whole section."""
+    hi = len(text) if hi is None else max(lo, min(hi, len(text)))
+    pos = max(lo, min(pos, hi))
+    start = text.rfind("\n", lo, pos) + 1
+    end = text.find("\n", pos, hi)
+    if end < 0:
+        end = hi
+    line = text[start:end]
+
+    if _LIST_LINE.match(line):
+        # a bullet owns its following indented/continuation lines until the
+        # next bullet, heading or blank line
+        while end < hi:
+            nxt = end + 1
+            nxt_end = text.find("\n", nxt, hi)
+            if nxt_end < 0:
+                nxt_end = hi
+            nxt_line = text[nxt:nxt_end]
+            if not nxt_line.strip() or _LIST_LINE.match(nxt_line) or _is_heading_line(nxt_line):
+                break
+            end = nxt_end
+        return start, end
+
+    # a paragraph: walk out to blank lines, stopping at a heading or a bullet
+    while start > lo:
+        prev_end = start - 1
+        if prev_end <= lo or text[prev_end] != "\n":
+            break
+        prev_start = text.rfind("\n", lo, prev_end) + 1
+        prev_line = text[prev_start:prev_end]
+        if (not prev_line.strip() or _LIST_LINE.match(prev_line)
+                or _is_heading_line(prev_line)):
+            break
+        start = prev_start
+    while end < hi:
+        nxt = end + 1
+        nxt_end = text.find("\n", nxt, hi)
+        if nxt_end < 0:
+            nxt_end = hi
+        nxt_line = text[nxt:nxt_end]
+        if (not nxt_line.strip() or _LIST_LINE.match(nxt_line)
+                or _is_heading_line(nxt_line)):
+            break
+        end = nxt_end
+    return start, end
+
+
+def _home_span(t: dict) -> str:
+    """The package's own text: its section when it is the section's only
+    package, else the paragraph / bullet holding its quote. Empty when the
+    model gave no usable quote and the section is shared."""
+    return t.get("home") or ""
+
+
+def _snippet(text: str) -> str:
+    """One-line display text for a source paragraph (full text, no cut)."""
+    s = re.sub(r"^\s*(?:[-*•+–—]|\d{1,3}[.)])\s+", "", text or "")
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _slug(text: str, max_len: int = 48) -> str:
+    """Stable, URL/JS-safe id piece: '2.1 Cổng thanh toán' -> '2-1-cong-thanh-toan'.
+    A long name is cut at a dash boundary, never in the middle of a word."""
+    import unicodedata
+    s = unicodedata.normalize("NFKD", text or "")
+    s = s.replace("đ", "d").replace("Đ", "D")
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    s = re.sub(r"[^a-zA-Z0-9]+", "-", s).strip("-").lower()
+    if len(s) > max_len:
+        cut = s.rfind("-", 0, max_len + 1)
+        s = s[:cut] if cut > 0 else s[:max_len]     # prefer a whole word
+    return s.strip("-") or "package"
+
+
+def _section_prefix(title: str) -> str:
+    """The short section number used before a package id ('2.1' -> '2-1')."""
+    m = re.match(r"\s*(\d+(?:\.\d+)*)", title or "")
+    return m.group(1).replace(".", "-") if m else ""
+
+
+def _count_phrases(text: str, role: str) -> tuple[bool, bool]:
+    """(number before role, role before number) in the text."""
+    before = post = False
+    t = text or ""
+    mods = r"(?:(?:senior|junior|mid|middle|lead|principal|sr|jr)\s+)?"
+    for al in _ROLE_ALIASES.get(role, [role]):
+        if re.search(rf"\b\d+\s+{mods}{re.escape(al)}s?\b", t, flags=re.I):
+            before = True
+        if re.search(rf"\b{re.escape(al)}s?\s+\d+\b(?!\s*(?:tuần|week|ngày|day|days))", t, flags=re.I):
+            post = True
+    return before, post
+
+
+def _apply_doc_counts(t: dict) -> None:
+    """Pull headcounts back to the numbers the package's home text states."""
+    if t.get("intro_only") or (t.get("weak") and t.get("overview")):
+        return                      # a parent section's intro / overview duplicate is not staffing
+    home = _home_span(t)
+    required = t.get("required") or {}
+    if not home or not required:
+        return
+    for role, n in _counts_in_brief(home).items():
+        spec = required.get(role)
+        if not isinstance(spec, dict):
             continue
-        for role, spec in (t.get("required") or {}).items():
-            old = twin["required"].setdefault(role, dict(spec))
-            for k in ("level", "count", "effort"):
-                if k in spec or k in old:
-                    old[k] = max(old.get(k, 100 if k == "effort" else 1), spec.get(k, 100 if k == "effort" else 1))
-        twin["duration_weeks"] = max(twin["duration_weeks"], t["duration_weeks"])
-        dls = [d for d in (twin.get("deadline"), t.get("deadline")) if d]
-        twin["deadline"] = min(dls) if dls else None
-        twin["priority"] = max(twin["priority"], t["priority"])
-        twin["depends_on_names"] = list(dict.fromkeys(twin.get("depends_on_names", []) + t.get("depends_on_names", [])))
-        twin["warnings"] = list(dict.fromkeys(twin.get("warnings", []) + t.get("warnings", [])))
-        twin["pos"] = min(twin["pos"], t["pos"])
+        before, post = _count_phrases(home, role)
+        # "Engineer 4" / "QA 3" can be the level written after the role; do not
+        # turn that number into four engineers / three QAs.
+        if post and not before and int(spec.get("level") or 0) == int(n):
+            continue
+        spec["count"] = max(1, int(n))
+
+
+def _mentions_package(text: str, name: str) -> bool:
+    """Does `text` name the package (bilingual tokens included)? Used before
+    trusting another reading's headcount."""
+    from web import _canonical_tokens
+    _, core = _canonical_tokens(text)
+    _, nc = _canonical_tokens(name)
+    if not nc:
+        return False
+    hits = len(core & nc)
+    return hits >= (len(nc) if len(nc) <= 2 else len(nc) - 1)
+
+
+def _same_package(a: dict, b: dict) -> bool:
+    """Two readings are one package when they come from the same section, or
+    when one name contains the other ('Partner API' / 'Partner API integration')."""
+    if a.get("section_start") == b.get("section_start"):
+        return True
+    na = re.sub(r"[^\w]+", " ", (a.get("name") or "").lower()).strip()
+    nb = re.sub(r"[^\w]+", " ", (b.get("name") or "").lower()).strip()
+    if not na or not nb:
+        return False
+    short, long = sorted((na, nb), key=len)
+    return len(short) >= 6 and short in long
+
+
+def _merge_packages(tasks: list[dict]) -> list[dict]:
+    """The same deliverable read in two parts -> one package.
+
+    Values come from the reading that has a real quote and sits in the home
+    span; another reading may only raise a headcount that its own text states
+    with a number. Levels, effort and duration are never maxed (that is what
+    made a package grow from 2 to 5 engineers across parts)."""
+    groups: list[list[dict]] = []
+    for t in tasks:
+        twin = None
+        if not t.get("error"):
+            twin = next((g for g in groups
+                         if not g[0].get("error")
+                         and _name_sim(g[0]["name"], t["name"]) >= MERGE_SIM
+                         and any(_same_package(m, t) for m in g)), None)
+        if twin is None:
+            groups.append([t])
+        else:
+            twin.append(t)
+
+    merged: list[dict] = []
+    for group in groups:
+        if len(group) == 1:
+            merged.append(group[0])
+            continue
+        # a weak reading (an overview duplicate, or a quote moved to its child
+        # section) never supplies the values; a quoted reading beats an unquoted
+        # one, and a parent-section intro beats nothing at all
+        primary = min(group, key=lambda x: (bool(x.get("weak")), bool(x.get("intro_only")),
+                                            not x.get("quoted"), x.get("pos", 0)))
+        out = dict(primary)
+        out["required"] = {r: dict(s) for r, s in (primary.get("required") or {}).items()}
+        out["warnings"] = list(primary.get("warnings") or [])
+        out["depends_on_names"] = list(primary.get("depends_on_names") or [])
+        for other in group:
+            if other is primary or other.get("error"):
+                continue
+            weak = bool(other.get("weak") and other.get("overview"))
+            span = _home_span(other)
+            if span and not weak and not other.get("intro_only") and _mentions_package(span, out["name"]):
+                # other parts may only add people when their own text names the
+                # package and writes "N <role>" (never a level written after it)
+                for role, n in _counts_in_brief(span).items():
+                    spec = out["required"].get(role)
+                    if not isinstance(spec, dict):
+                        continue
+                    before, _ = _count_phrases(span, role)
+                    if not before:
+                        continue
+                    spec["count"] = max(int(spec.get("count") or 1), int(n))
+            out["depends_on_names"] = list(dict.fromkeys(
+                (out.get("depends_on_names") or []) + (other.get("depends_on_names") or [])))
+            out["warnings"] = list(dict.fromkeys(
+                (out.get("warnings") or []) + (other.get("warnings") or [])))
+            if weak or other.get("intro_only"):
+                continue                       # never take values from an intro / duplicate reading
+            if out.get("deadline") is None and other.get("deadline"):
+                out["deadline"] = other["deadline"]
+            if not out.get("rationale") and other.get("rationale"):
+                out["rationale"] = other["rationale"]
+            out["pos"] = min(out.get("pos", 0), other.get("pos", out.get("pos", 0)))
+        out.pop("weak", None)
+        out.pop("intro_only", None)
+        merged.append(out)
     return merged
 
 
@@ -912,36 +1250,104 @@ def _order_rules(text: str, secs: list[dict], tasks: list[dict]) -> list[tuple[d
     return rules
 
 
-_ROLE_WORDS = {
-    "pm": r"\bpm\b|project manager|quản lý dự án|delivery manager",
-    "analyst": r"\bba\b|analyst|phân tích|business analysis",
-    "engineer": r"engineer|kỹ sư|developer|\bdev\b|lập trình",
-    "qa": r"\bqa\b|\bqc\b|tester|kiểm thử|\btest(?:er|ing)?\b",
-}
-
-
 def _unstated_roles(required: dict, section_text: str) -> list[str]:
     """Roles the model added although the section lists its staffing and
-    never mentions them (e.g. a PM and an analyst on '1 QA, 1 engineer')."""
-    low = section_text.lower()
-    named = {r for r, pat in _ROLE_WORDS.items() if re.search(pat, low)}
+    never gives them a 'number + role' (e.g. a PM and an analyst on '1 QA, 1 engineer').
+    A bare mention such as 'phân tích dữ liệu' in prose does not staff an analyst."""
+    named = set(_counts_in_brief(section_text)) | set(_levels_in_brief(section_text))
     if not named:
-        return []          # the section says nothing about staffing: keep the model's guess
+        return []          # the section says nothing about headcount: keep the model's guess
     return [r for r in required if r not in named]
 
 
-def _creates_cycle(tasks: list[dict], frm: str, to: str) -> bool:
-    """Would `frm` depending on `to` close a loop?"""
-    deps = {t["id"]: set(t.get("depends_on") or []) for t in tasks}
-    stack, seen = [to], set()
-    while stack:
-        x = stack.pop()
+def _cycle_path(tasks: list[dict], frm: str, to: str) -> list[tuple[str, str]]:
+    """Edges (a, b) meaning a depends on b, forming the path `to` → … → `frm`.
+    Adding `frm` depending on `to` would close that loop. Empty when acyclic."""
+    deps = {t["id"]: list(t.get("depends_on") or []) for t in tasks}
+    parent: dict[str, str | None] = {to: None}
+    queue = [to]
+    for x in queue:
         if x == frm:
-            return True
-        if x not in seen:
-            seen.add(x)
-            stack.extend(deps.get(x, ()))
-    return False
+            break
+        for y in deps.get(x, []):
+            if y not in parent:
+                parent[y] = x
+                queue.append(y)
+    if frm not in parent:
+        return []
+    path: list[tuple[str, str]] = []
+    x = frm
+    while parent.get(x) is not None:
+        path.append((parent[x], x))
+        x = parent[x]
+    path.reverse()
+    return path
+
+
+def _package_source(t: dict, sec: dict | None, n_own: int) -> str:
+    """Where the package came from: its own section title when the section holds
+    just this package, else the home paragraph (never the shared top heading)."""
+    title = (sec or {}).get("title") or ""
+    if title and n_own == 1:
+        return title
+    home = _home_span(t)
+    return _snippet(home) if home else ""
+
+
+def _child_sections(secs: list[dict], sec: dict) -> list[dict]:
+    """The direct child headings of `sec`."""
+    kids = []
+    for s in secs:
+        if s["start"] <= sec["start"]:
+            continue
+        if s["level"] <= sec["level"]:
+            break
+        if s["level"] == sec["level"] + 1:
+            kids.append(s)
+    return kids
+
+
+def _child_for_name(secs: list[dict], sec: dict, name: str) -> dict | None:
+    """The child heading that names this package, if any. Used when a package's
+    quote sits in a parent section's intro: the child section is its real home."""
+    best, best_score = None, 0.0
+    for child in _child_sections(secs, sec):
+        title = re.sub(r"^[\d\.\)IVXLC\s]+", "", child["title"])
+        if not title:
+            continue
+        score = _name_sim(title, name)
+        if score > best_score:
+            best, best_score = child, score
+    return best if best_score >= MERGE_SIM else None
+
+
+def _package_score(t: dict, sec: dict | None, n_own: int = 1,
+                   today: date | None = None) -> tuple[int, list[str]]:
+    """How well the document supports this package. The 20-package limit keeps
+    the best-supported work first, so a fragment read in the overview cannot
+    take the slot of a package that has its own section, staffing and dates."""
+    today = today or date.today()
+    score = 0
+    reasons: list[str] = []
+    home = t.get("home") or ""
+    if sec and sec.get("title") and not sec.get("overview") and n_own == 1:
+        score += 3
+    if home and _counts_in_brief(home):
+        score += 2
+    if home and (_extract_days(home) is not None
+                 or re.search(r"\d+\s*(?:tuần|weeks?|tháng|months?)", home, re.I)):
+        score += 1
+    if t.get("deadline") or (home and _stage_milestones(home, today)):
+        score += 1
+    if home and _ESSENTIAL.search(home):
+        score += 1
+    if sec and sec.get("overview"):
+        score -= 3
+        reasons.append("overview section")
+    if not t.get("quoted"):
+        score -= 2
+        reasons.append("no quote")
+    return score, reasons
 
 
 def decompose_document(text: str, today: date | None = None) -> dict:
@@ -952,7 +1358,10 @@ def decompose_document(text: str, today: date | None = None) -> dict:
     itself: where each package is (source), stage dates, dependency direction,
     merging duplicates, dropping schedules/appendix items, and what to keep
     when there are too many.
-    Returns {summary, tasks:[{id,name,required,...,rationale,source,warnings,error}]}.
+    Returns {summary, tasks:[{id,name,required,...,rationale,source,warnings,error}],
+             warnings, failed_parts:[{title,error}], parts}. A task's
+    `suggested_deps` are the model's guesses: the UI shows them as chips and
+    only a document-confirmed edge reaches `depends_on`.
     """
     from concurrent.futures import ThreadPoolExecutor
 
@@ -960,9 +1369,6 @@ def decompose_document(text: str, today: date | None = None) -> dict:
     text = (text or "").strip()
     if not text:
         return {"summary": "", "tasks": [], "error": "document is empty", "manual": True}
-    cached = cache_get("decompose", text, today)
-    if cached:
-        return cached
     skill = _load_skill("decompose")
     if not skill:
         return {"summary": "", "tasks": [], "error": "decompose skill is missing"}
@@ -977,22 +1383,74 @@ def decompose_document(text: str, today: date | None = None) -> dict:
     parts = _document_parts(body) if long_doc else [("", text, 0)]
     outline = "\n".join(f"- {s['title']}" + (" (appendix — context only)" if s["context_only"] else "")
                         for s in secs if s["title"])[:6000] or "(no headings)"
+    n_parts = len(parts)
+
+    def _part_key(part: tuple) -> str:
+        # skill + title + body only: an unrelated sentence elsewhere in the
+        # document cannot change this part's prompt or its cache key
+        return f"{hashlib.sha256(skill.encode()).hexdigest()}\x00{part[0]}\x00{part[1]}"
+
+    try:
+        workers = max(1, min(8, int(os.environ.get("DECOMPOSE_WORKERS", "3") or 3)))
+    except ValueError:
+        workers = 3
+    try:
+        budget = max(10.0, float(os.environ.get("DECOMPOSE_BUDGET_S", "150") or 150))
+    except ValueError:
+        budget = 150.0
+    deadline = time.monotonic() + budget
 
     def run(i_part):
         i, part = i_part
+        title = part[0] or f"part {i}"
+        t0 = time.monotonic()
+        key = _part_key(part)
+        cached = cache_get("decompose_part", key, today)
+        if cached is not None:
+            sys.stderr.write(f"decompose part {title!r}: cache hit ({time.monotonic() - t0:.2f}s)\n")
+            return part, cached, ""
+        if time.monotonic() >= deadline:
+            err = f"decomposition time limit ({budget:.0f}s) reached before this part was read"
+            sys.stderr.write(f"decompose part {title!r}: {err}\n")
+            return part, None, err
         try:
-            return part, _call_part(skill, today, part, i, len(parts), outline, len(text)), ""
+            data = _call_part(skill, today, part, i, n_parts, outline, len(text), deadline=deadline)
         except Exception as e:
-            return part, None, _friendly_ai_error(e)
+            err = _friendly_ai_error(e)
+            sys.stderr.write(f"decompose part {title!r}: failed in {time.monotonic() - t0:.1f}s — {err}\n")
+            return part, None, err
+        if not isinstance(data, dict):
+            err = "AI returned invalid JSON — try again"
+            sys.stderr.write(f"decompose part {title!r}: {err}\n")
+            return part, None, err
+        cache_put("decompose_part", key, today, data)
+        sys.stderr.write(f"decompose part {title!r}: ok in {time.monotonic() - t0:.1f}s\n")
+        return part, data, ""
 
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        started = time.monotonic()
         results = list(pool.map(run, enumerate(parts, 1)))
 
-    failed = [(p[0] or f"part {i}") for i, (p, data, err) in enumerate(results, 1) if err]
-    if len(failed) == len(results):
-        return {"summary": "", "tasks": [], "error": results[0][2], "manual": True}
-    if failed:
-        extra_warn.append("Could not read: " + ", ".join(failed[:6]) + " — add those packages by hand.")
+    failed_parts: list[dict] = []
+    failed_count = 0
+    for i, (p, data, err) in enumerate(results, 1):
+        if not err:
+            continue
+        failed_count += 1
+        title = p[0] or f"part {i}"
+        if any(f["title"] == title for f in failed_parts):
+            continue                      # a long section split into chunks: report it once
+        failed_parts.append({"title": title, "error": err})
+    sys.stderr.write(f"decompose: {len(parts)} parts in {time.monotonic() - started:.1f}s, "
+                     f"{failed_count} failed\n")
+    sys.stderr.flush()
+    if failed_parts and failed_count == len(results):
+        return {"summary": "", "tasks": [], "error": failed_parts[0]["error"],
+                "warnings": extra_warn, "failed_parts": failed_parts,
+                "parts": len(parts), "manual": True}
+    if failed_parts:
+        extra_warn.append("Some document parts could not be read — retry them or add "
+                          "those packages by hand.")
 
     norm = _normalized(body)
     summaries: list[str] = []
@@ -1007,22 +1465,53 @@ def decompose_document(text: str, today: date | None = None) -> dict:
             if not isinstance(raw_t, dict):
                 continue
             name = str(raw_t.get("name") or "").strip() or f"Package {len(tasks) + 1}"
-            pos = _find_quote(norm, str(raw_t.get("evidence") or ""), lo=part[2])
+            # the quote is the package's anchor in the document: it decides the
+            # home paragraph that headcounts, stage dates and the source come from
+            qpos = _find_quote(norm, str(raw_t.get("evidence") or ""), lo=part[2])
+            quoted = qpos is not None
+            pos = qpos
             if pos is None:   # no usable quote: the section whose heading is this name, else the part
                 pos = next((s["start"] for s in secs if s["title"] and _name_sim(
                     re.sub(r"^[\d\.\)IVXLC\s]+", "", s["title"]), name) >= MERGE_SIM), part[2])
-            sec = _section_at(secs, pos) or {"title": "", "start": 0, "context_only": False}
+            sec = _section_at(secs, pos) or {"title": "", "start": 0, "context_only": False,
+                                             "overview": False, "has_children": False, "end": len(body)}
+            # a quote in a parent section's intro belongs to the child heading
+            # that names the package: move it there before reading headcounts
+            weak = intro_only = False
+            if sec.get("has_children"):
+                child = _child_for_name(secs, sec, name)
+                if child:
+                    sec, pos = child, child["start"]
+                    quoted = False
+                    weak = True
+                else:
+                    intro_only = True
             why = ("appendix / cross-cutting section, read as context" if sec["context_only"]
                    else "schedule/reference, not a deliverable" if _NOT_A_PACKAGE.search(name) or _NOT_A_PACKAGE.search(sec["title"])
-                   else "a delivery stage, planned inside each package" if _STAGE_NAME.search(name) else "")
+                   else "a delivery stage, planned inside each package" if _is_stage_name(name) else "")
             if why:
                 dropped.append(f"{name} ({why})")
                 continue
+            home_start = home_end = None
+            home = ""
+            if weak:
+                # the child section is the package's home, not the parent intro
+                home_start, home_end = sec["start"], sec["end"]
+                home = body[home_start:home_end].strip()
+            elif quoted:
+                home_start, home_end = _paragraph_span(body, pos, sec["start"], sec["end"])
+                home = body[home_start:home_end].strip()
             proj, err, warnings = _validate_project(raw_t, brief=name, today=today, scan_dates=False)
+            if intro_only:
+                warnings.append("staffing taken from the section intro — check")
             deps = raw_t.get("depends_on") or []
             common = {"rationale": str(raw_t.get("rationale") or "").strip(), "pos": pos,
                       "section": sec["title"], "section_start": sec["start"],
                       "source": sec["title"] or (part[0] if long_doc else ""),
+                      "quoted": quoted, "home": home,
+                      "home_start": home_start, "home_end": home_end,
+                      "overview": bool(sec.get("overview")),
+                      "weak": weak, "intro_only": intro_only,
                       "depends_on_names": [str(d) for d in ([deps] if isinstance(deps, str) else deps) if d]}
             if err or not proj:
                 tasks.append({"name": name, "required": {}, "duration_weeks": 3, "deadline": None,
@@ -1032,85 +1521,193 @@ def decompose_document(text: str, today: date | None = None) -> dict:
             tasks.append({**proj, "warnings": warnings, "error": "", **common})
     if not tasks:
         return {"summary": " ".join(summaries[:1]), "tasks": [], "warnings": extra_warn,
-                "error": "could not split the document into work packages", "manual": True}
+                "error": "could not split the document into work packages", "manual": True,
+                "failed_parts": failed_parts, "parts": len(parts)}
+
+    # a package read in an overview section that repeats a package from a
+    # content section is only a duplicate reading: the content one is primary
+    for t in tasks:
+        if not t.get("overview") or t.get("error"):
+            continue
+        twin = next((o for o in tasks if o is not t and not o.get("overview")
+                     and not o.get("error")
+                     and _name_sim(o["name"], t["name"]) >= MERGE_SIM), None)
+        if twin:
+            t["weak"] = True
+            t["section_start"] = twin["section_start"]   # let _merge_packages group them
 
     tasks = _merge_packages(tasks)
-    # stable: document order; when over the cap keep go-live / mandatory work first
+    # stable: document order; the score decides what to keep when over the cap
     tasks.sort(key=lambda t: t["pos"])
+    owners: dict[int, list[dict]] = {}
+    for t in tasks:
+        owners.setdefault(t["section_start"], []).append(t)
+    for t in tasks:
+        sec = next((s for s in secs if s["start"] == t["section_start"]), None)
+        n_own = len(owners.get(t["section_start"], []))
+        if sec and sec["title"] and n_own == 1:
+            # the one package in a section owns the whole section
+            t["home_start"], t["home_end"] = sec["start"], sec["end"]
+            t["home"] = body[sec["start"]:sec["end"]].strip()
+        t["source"] = _package_source(t, sec, n_own)
+        if not t.get("error"):
+            _apply_doc_counts(t)
+        t["_score"], t["_score_reasons"] = _package_score(t, sec, n_own, today)
+
+    # ids follow the package name (not the section): adding a sentence never
+    # renumbers packages, and the section number is only a short prefix
+    used_ids: set[str] = set()
+    for t in tasks:
+        prefix = _section_prefix(t.get("section") or "")
+        base = _slug(t["name"])
+        cand = f"doc-{prefix}-{base}" if prefix else f"doc-{base}"
+        if cand in used_ids:
+            k = 2
+            while f"{cand}-{k}" in used_ids:
+                k += 1
+            cand = f"{cand}-{k}"
+        used_ids.add(cand)
+        t["id"] = cand
+
     cap = MAX_PACKAGES_LONG if long_doc else MAX_PACKAGES_SHORT
     if len(tasks) > cap:
-        def sec_text(t):
-            sec = _section_at(secs, t["pos"])
-            return body[sec["start"]:sec["end"]] if sec else ""
-        ranked = sorted(tasks, key=lambda t: (not _ESSENTIAL.search(sec_text(t)), -t["priority"], t["pos"]))
+        ranked = sorted(tasks, key=lambda t: (-t.get("_score", 0),
+                                              -(t.get("priority") or 3), t["id"]))
         keep = {id(t) for t in ranked[:cap]}
-        dropped = [f"{t['name']} (over the {cap}-package limit)" for t in tasks if id(t) not in keep] + dropped
-        tasks = [t for t in tasks if id(t) in keep]
-    for i, t in enumerate(tasks, 1):
-        t["id"] = f"doc{i}"
 
-    # dependencies: the model's names, then the document's own ordering sentences win
+        def _why_dropped(t: dict) -> str:
+            reasons = ", ".join(t.get("_score_reasons") or [])
+            return (f"{t['name']} (over the {cap}-package limit, score {t.get('_score', 0)}"
+                    f"{': ' + reasons if reasons else ''})")
+
+        dropped = [_why_dropped(t) for t in tasks if id(t) not in keep] + dropped
+        tasks = [t for t in tasks if id(t) in keep]
+
+    # dependencies: only ordering sentences copied from the document reach the
+    # solver. The model's own names stay in `suggested_deps` until the document
+    # confirms them (or the user ticks them in the UI).
     from web import _names_close  # lazy: web imports llm
     for t in tasks:
-        ids = []
+        sug: list[dict] = []
         for n in t.pop("depends_on_names", []):
             hit = next((o["id"] for o in tasks if o is not t and o["name"].strip().lower() == n.strip().lower()), None)
             hit = hit or next((o["id"] for o in tasks if o is not t and _names_close(o["name"], n)), None)
-            if hit and hit not in ids:
-                ids.append(hit)
-        t["depends_on"] = ids
+            if hit and all(s["id"] != hit for s in sug):
+                sug.append({"id": hit, "why": "AI guess"})
+        t["suggested_deps"] = sug
+        t["depends_on"] = []
+
+    def _drop_suggestion(t: dict, dep_id: str) -> None:
+        t["suggested_deps"] = [s for s in (t.get("suggested_deps") or []) if s["id"] != dep_id]
+
     for first, then, quote in _order_rules(body, secs, tasks):
-        if then["id"] in first["depends_on"]:
-            first["depends_on"].remove(then["id"])
+        # the model guessed "first depends on then"; the document says the opposite
+        if any(s["id"] == then["id"] for s in first.get("suggested_deps") or []):
+            _drop_suggestion(first, then["id"])
             first["warnings"].append(f"dependency on “{then['name']}” removed — the document says the "
                                      f"opposite order: “{quote}”")
-        if first["id"] not in then["depends_on"]:
-            if _creates_cycle(tasks, then["id"], first["id"]):
-                then["warnings"].append(f"the document says “{first['name']}” comes first (“{quote}”), "
-                                        "but that would make a dependency loop — check by hand")
-            else:
-                then["depends_on"].append(first["id"])
-                then["warnings"].append(f"depends on “{first['name']}” — from the document: “{quote}”")
+        if first["id"] in then["depends_on"]:
+            continue
+        confirmed = any(s["id"] == first["id"] for s in then.get("suggested_deps") or [])
+        cycle = _cycle_path(tasks, then["id"], first["id"])
+        if cycle:
+            then["warnings"].append(f"the document says “{first['name']}” comes first (“{quote}”), "
+                                    "but that would make a dependency loop — check by hand")
+            continue
+        then["depends_on"].append(first["id"])
+        if confirmed:
+            _drop_suggestion(then, first["id"])
+            then["warnings"].append(f"depends on “{first['name']}” — confirmed by the document: “{quote}”")
+        else:
+            then["warnings"].append(f"depends on “{first['name']}” — from the document: “{quote}”")
 
-    # stage dates: the package's own section first; else the project-wide ones
-    # stated in sections that hold no package (e.g. a release timeline)
+    keep_ids = {t["id"] for t in tasks}
+    for t in tasks:
+        t["suggested_deps"] = [s for s in t["suggested_deps"]
+                               if s["id"] in keep_ids and s["id"] != t["id"]
+                               and s["id"] not in t["depends_on"]]
+
+    # stage dates: the package's own home span first; else the project-wide
+    # ones stated in sections that hold no package (e.g. a release timeline)
     owned = {t["section_start"] for t in tasks}
     shared = _stage_milestones("\n".join(body[s["start"]:s["end"]] for s in secs
                                          if s["start"] not in owned and not s["context_only"]), today)
     for t in tasks:
-        sec = next((s for s in secs if s["start"] == t["section_start"]), None)
-        own = _stage_milestones(body[sec["start"]:sec["end"]], today) if sec and sec["title"] else {}
-        if len(tasks) == 1:
-            own = {**_stage_milestones(body, today), **own}
-        ms = own or shared
+        home = _home_span(t)
+        own = _stage_milestones(home, today) if home else {}
+        ms = own or (shared if home else {})
+        t["_ms_shared"] = bool(ms and not own)
         if ms:
-            t["milestones"] = ms
+            t["milestones"] = dict(ms)
             if not own:
                 t["warnings"].append("stage dates taken from the project timeline — clear them if they do not apply")
-        if sec and sec["title"] and len(t.get("required") or {}) > 1:
-            for role in _unstated_roles(t["required"], body[sec["start"]:sec["end"]]):
+        else:
+            t["warnings"].append("no stage dates in the document for this package")
+            if not home:
+                t["warnings"].append("no quote found for this package — stage dates not assigned; check by hand")
+
+    # (b) a shared timeline date cannot contradict a document dependency: if the
+    # document says A finishes before B, A's go-live must not be after B starts
+    for a in tasks:
+        if not a.get("_ms_shared") or not a.get("milestones"):
+            continue
+        latest = max(a["milestones"].values())
+        conflict = None
+        for b in tasks:
+            if b is a or a["id"] not in (b.get("depends_on") or []):
+                continue
+            dates = [d for d in (b.get("milestones") or {}).values()]
+            earliest = None
+            if dates:
+                earliest = min(dates)
+            elif b.get("deadline") and b.get("duration_weeks"):
+                try:
+                    earliest = (date.fromisoformat(str(b["deadline"]))
+                                - timedelta(weeks=int(b["duration_weeks"]))).isoformat()
+                except (ValueError, TypeError):
+                    earliest = None
+            if earliest and latest > earliest:
+                conflict = (b, earliest)
+                break
+        if conflict:
+            b, earliest = conflict
+            a.pop("milestones", None)
+            a["warnings"].append(
+                f"stage dates not taken from the project timeline — its latest date {latest} "
+                f"is after “{b['name']}” starts ({earliest}), but the document says "
+                f"“{a['name']}” comes first; set them by hand")
+
+    for t in tasks:
+        sec = next((s for s in secs if s["start"] == t["section_start"]), None)
+        home = _home_span(t)
+        if home and len(t.get("required") or {}) > 1:
+            label = (sec or {}).get("title") or t["name"]
+            for role in _unstated_roles(t["required"], home):
                 if len(t["required"]) > 1:
                     t["required"].pop(role)
-                    t["warnings"].append(f"{role} removed — “{sec['title']}” lists its staffing "
+                    t["warnings"].append(f"{role} removed — “{label}” lists its staffing "
                                          f"without a {role}; add it back if needed")
         t["warnings"] = list(dict.fromkeys(t["warnings"] + _guess_flags(t, text)))
-        for k in ("pos", "section", "section_start"):
+        for k in ("pos", "section", "section_start", "quoted", "home", "home_start",
+                  "home_end", "overview", "weak", "intro_only", "_score", "_score_reasons",
+                  "_ms_shared"):
             t.pop(k, None)
 
     if dropped:
         extra_warn.append("Not packaged: " + "; ".join(dropped[:12]) + (" …" if len(dropped) > 12 else ""))
     if long_doc:
         extra_warn.insert(0, f"Long document: read in {len(parts)} parts and merged — "
-                             "check the Source column for where each package came from.")
+                             "check the “From:” line in the “Why this package” column for where "
+                             "each package came from.")
     out = {
         "summary": summaries[0] if len(summaries) == 1 else f"{len(tasks)} work packages from {len(parts)} parts",
         "tasks": tasks,
         "item_count": len(tasks) + len(dropped),
         "omitted": dropped,
         "warnings": extra_warn,
+        "failed_parts": failed_parts,
         "parts": len(parts),
     }
-    cache_put("decompose", text, today, out)
     return out
 
 

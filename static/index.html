@@ -112,6 +112,11 @@
     padding: 2px 8px 2px 6px; border-radius: 6px; background: #f2f4f7; color: var(--ink-2);
     border: 1px solid var(--line); white-space: nowrap;
   }
+  .ai-chip {
+    border-style: dashed; background: #fff; color: var(--muted); cursor: pointer;
+    font-weight: 500;
+  }
+  .ai-chip input { accent-color: var(--accent); margin: 0; }
   .person-chip .r { font-size: 10px; font-weight: 700; text-transform: uppercase; color: var(--muted); letter-spacing: .03em; }
   .role-badge {
     font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
@@ -444,7 +449,8 @@ async function replan(c){
   render(d);
   restoreForm();
   if((r.notes||[]).length) $('whatifBox').innerHTML=r.notes.map(n=>`<div class="note note-warn">${esc(n)}</div>`).join('');
-  return d;
+  // carry the approve response's facts so the caller can report what moved
+  return {...d, notes:r.notes||[], moved:r.moved||[], delta:r.delta};
 }
 async function reset(){
   const gen=++PLAN_GEN;
@@ -1291,6 +1297,10 @@ async function doExplain(){
 let DOC_TASKS = [];
 let DOC_METHOD = 'waterfall';   // imported documents are usually staged (requirements → … → go-live)
 let DOC_STAFF = null;
+let DOC_FAILED = [];            // document parts the AI could not read
+let DOC_SKIP_FAILED = false;    // user chose to add those packages by hand
+let DOC_RETRYING = false;
+let DOC_TEXT = '';              // the document the current split was read from
 
 let DOC_TICK=null;
 function startDocWait(msg){
@@ -1304,7 +1314,7 @@ function stopDocWait(){ if(DOC_TICK){ clearInterval(DOC_TICK); DOC_TICK=null; } 
 let MANUAL_N=0;
 function blankTask(){
   MANUAL_N+=1;
-  return {id:'man'+MANUAL_N, name:'', required:{engineer:{level:3,count:1}}, duration_weeks:3, deadline:'', priority:3, depends_on:[], rationale:'', warnings:[], include:true, fieldError:''};
+  return {id:'man'+MANUAL_N, name:'', required:{engineer:{level:3,count:1}}, duration_weeks:3, deadline:'', priority:3, depends_on:[], suggested_deps:[], rationale:'', warnings:[], include:true, fieldError:''};
 }
 // "2 engineer:4, pm:4 20%, qa:3 w3-4" — optional "N%" effort and "wA-B" weeks (1-based) per role
 function parseReq(s){
@@ -1375,6 +1385,7 @@ function roleText(req){
 async function doDecompose(){
   const doc=$('docInput').value.trim();
   if(!doc){ $('docWizard').innerHTML='<div class="note note-warn">Paste a document or open a file first.</div>'; return; }
+  DOC_TEXT=doc;
   $('docStepLabel').textContent='Step 1 / 2 — reading document…';
   startDocWait('Reading document…');
   const r=await post('/api/decompose',{document:doc});
@@ -1384,9 +1395,13 @@ async function doDecompose(){
     $('docStepLabel').textContent='Step 1 / 2';
     return;
   }
+  DOC_FAILED=(r.failed_parts||[]);
+  DOC_SKIP_FAILED=false;
   if(r.error && !(r.tasks&&r.tasks.length)){
-    DOC_TASKS=[blankTask()];
+    DOC_TASKS=[];
     DOC_STAFF=null;
+    if(DOC_FAILED.length){ renderDocTasks(r.summary||'', r.warnings||[]); return; }
+    DOC_TASKS=[blankTask()];
     renderDocTasks('', [String(r.error), 'Fill in the packages below by hand, then approve the split.']);
     return;
   }
@@ -1395,16 +1410,89 @@ async function doDecompose(){
   renderDocTasks(r.summary||'', r.warnings||[]);
 }
 
+// Failed parts: keep every successful part from the per-part cache and ask the
+// AI only for the parts that failed. User edits are kept by package id.
+async function retryFailedParts(){
+  const doc=(DOC_TEXT || $('docInput').value).trim();
+  if(!doc || DOC_RETRYING) return;
+  DOC_RETRYING=true;
+  harvestDocTasks();
+  const old=DOC_TASKS.slice();
+  $('docWizard').innerHTML='<div class="loading">Reading the failed parts again…</div>';
+  const r=await post('/api/decompose',{document:doc, retry:true});
+  DOC_RETRYING=false;
+  if(r._status===429){
+    $('docWizard').innerHTML=`<div class="note note-bad">${esc(r.error||'too many AI requests')} ${esc('Try again in a minute.')}</div>`;
+    setTimeout(()=>{ if($('docWizard')) renderDocTasks(); }, 1500);
+    return;
+  }
+  DOC_FAILED=(r.failed_parts||[]);
+  DOC_SKIP_FAILED=false;
+  if(r.error && !((r.tasks||[]).length || DOC_FAILED.length)){
+    $('docWizard').innerHTML=`<div class="note note-bad">${esc(String(r.error))}</div>`;
+    setTimeout(()=>renderDocTasks(), 1500);
+    return;
+  }
+  const fresh=(r.tasks||[]).map(t=>({...t, include:t.include!==false, fieldError:''}));
+  const byId=Object.fromEntries(fresh.map(t=>[t.id,t]));
+  // a cached part returns the same ids — put the user's edits back on top
+  old.forEach(o=>{
+    const n=byId[o.id];
+    if(!n) return;
+    ['name','required','duration_weeks','deadline','priority','milestones',
+     'depends_on','include','fieldError'].forEach(k=>{ if(o[k]!==undefined) n[k]=o[k]; });
+    n.suggested_deps=(n.suggested_deps||[]).filter(sd=>!(n.depends_on||[]).includes(sd.id));
+  });
+  const manual=old.filter(o=>String(o.id).startsWith('man') && !byId[o.id]);
+  DOC_TASKS=fresh.concat(manual);
+  renderDocTasks(r.summary||DOC_SUMMARY, r.warnings||[]);
+}
+
 // dependencies live in DOC_TASKS[i].depends_on; chips edit it and redraw
-function addDocDep(i,id){ if(!id) return; harvestDocTasks(); const t=DOC_TASKS[i]; t.depends_on=[...(t.depends_on||[]),id]; renderDocTasks(); }
+function addDocDep(i,id){
+  if(!id) return;
+  harvestDocTasks();
+  const t=DOC_TASKS[i];
+  t.depends_on=[...new Set([...(t.depends_on||[]),id])];
+  t.suggested_deps=(t.suggested_deps||[]).filter(s=>s.id!==id);
+  renderDocTasks();
+}
 function removeDocDep(i,id){ harvestDocTasks(); const t=DOC_TASKS[i]; t.depends_on=(t.depends_on||[]).filter(x=>x!==id); renderDocTasks(); }
 let DOC_SUMMARY='', DOC_WARN=[];
+
+function failsPanel(){
+  if(!DOC_FAILED.length) return '';
+  const items=DOC_FAILED.map(f=>`<li class="flex items-start justify-between gap-3 py-1">
+    <span class="min-w-0 break-words"><span class="font-semibold">${esc(f.title||'part')}</span> — ${esc(f.error||'could not be read')}</span>
+    <button type="button" class="link-btn shrink-0" onclick="retryFailedParts()">Read this part again</button>
+  </li>`).join('');
+  return `<div class="note note-bad mb-3">
+    <div class="font-semibold mb-1">${DOC_FAILED.length} document part${DOC_FAILED.length===1?'':'s'} could not be read</div>
+    <ul class="mb-2">${items}</ul>
+    <label class="flex items-center gap-2 text-xs font-medium">
+      <input type="checkbox" id="docSkipFailed" ${DOC_SKIP_FAILED?'checked':''} onchange="DOC_SKIP_FAILED=this.checked;renderDocTasks()">
+      Skip — I will add those packages by hand
+    </label>
+  </div>`;
+}
 function renderDocTasks(summary, extraWarn){
   if(summary!==undefined) DOC_SUMMARY=summary;
   if(extraWarn!==undefined) DOC_WARN=extraWarn;
   summary=DOC_SUMMARY; extraWarn=DOC_WARN;
   $('docStepLabel').textContent='Step 1 / 2 — review the split';
   if(!DOC_TASKS.length){
+    const banner=(extraWarn||[]).map(w=>`<div class="note note-warn mb-2">${esc(w)}</div>`).join('');
+    if(DOC_FAILED.length){
+      $('docWizard').innerHTML=`<div class="panel">
+        ${banner}
+        ${failsPanel()}
+        <div class="mt-3 flex gap-2">
+          <button onclick="DOC_TASKS=[blankTask()];renderDocTasks('Add the packages by hand')" class="btn btn-primary">Add a package by hand</button>
+          <button onclick="DOC_TASKS=[];DOC_FAILED=[];DOC_SKIP_FAILED=false;$('docWizard').innerHTML='';$('docStepLabel').textContent='Step 1 / 2'" class="btn btn-ghost">Cancel</button>
+        </div>
+      </div>`;
+      return;
+    }
     $('docWizard').innerHTML='<div class="note note-bad">Could not split into work packages.</div>';
     return;
   }
@@ -1413,7 +1501,7 @@ function renderDocTasks(summary, extraWarn){
     return `<tr class="align-top">
       <td class="py-2 pr-2"><input type="checkbox" class="docInc" data-i="${i}" ${t.include?'checked':''}></td>
       <td class="py-2 pr-2 min-w-[200px]"><textarea rows="2" class="docName px-2 py-1 w-full text-sm resize-y" data-i="${i}">${esc(t.name||'')}</textarea></td>
-      <td class="py-2 pr-2"><input class="docReq px-2 py-1 w-52 text-xs" data-i="${i}" value="${esc(reqText(t.required))}" placeholder="2 engineer:4, pm:4 20%, qa:3 w3-4" title="role:level · optional N% effort · optional wA-B = weeks A to B of the package"></td>
+      <td class="py-2 pr-2 max-w-[180px]"><input class="docReq px-2 py-1 w-44 max-w-full text-xs" data-i="${i}" value="${esc(reqText(t.required))}" placeholder="2 engineer:4, pm:4 20%, qa:3 w3-4" title="role:level · optional N% effort · optional wA-B = weeks A to B of the package"></td>
       <td class="py-2 pr-2">
         <input type="number" min="1" class="docDur ${t.fieldError&&t.fieldError.includes('weeks')?'!border-rose-500':''} px-2 py-1 w-14 text-sm" data-i="${i}" value="${t.duration_weeks??''}">
         ${t.duration_inferred?'<div class="text-[10px] text-amber-700 font-medium">AI guess</div>':''}
@@ -1426,24 +1514,30 @@ function renderDocTasks(summary, extraWarn){
         <input type="number" min="1" max="5" class="docPrio ${t.fieldError&&t.fieldError.includes('priority')?'!border-rose-500':''} px-2 py-1 w-12 text-sm" data-i="${i}" value="${t.priority??''}">
         ${t.priority_inferred?'<div class="text-[10px] text-amber-700 font-medium">AI guess</div>':''}
       </td>
-      <td class="py-2 pr-2 text-xs whitespace-nowrap">
+      <td class="py-2 pr-2 text-xs whitespace-nowrap min-w-[128px] max-w-[150px]">
         <label class="flex items-center gap-1 mb-1"><span class="w-12 text-[#667085]">UAT</span><input type="date" class="docUat px-1.5 py-0.5 text-xs" data-i="${i}" value="${(t.milestones||{}).uat||''}"></label>
         <label class="flex items-center gap-1"><span class="w-12 text-[#667085]">Go-live</span><input type="date" class="docLive px-1.5 py-0.5 text-xs" data-i="${i}" value="${(t.milestones||{}).deploy||''}"></label>
       </td>
-      <td class="py-2 pr-2 text-xs text-[#344054] min-w-[170px]">
+      <td class="py-2 pr-2 text-xs text-[#344054] min-w-[160px] max-w-[220px]">
         <div class="flex flex-wrap gap-1">${(t.depends_on||[]).map(id=>{
           const dep=DOC_TASKS.find(x=>x.id===id); if(!dep) return '';
-          return `<span class="person-chip max-w-[170px]" title="${esc(dep.name)}"><span class="truncate">${esc(dep.name)}</span><button type="button" class="text-[#98a2b3] hover:text-[#b42318] font-semibold leading-none" aria-label="Remove dependency on ${esc(dep.name)}" onclick="removeDocDep(${i},'${dep.id}')">×</button></span>`;
+          return `<span class="person-chip max-w-[200px]" title="${esc(dep.name)}"><span class="truncate">${esc(dep.name)}</span><button type="button" class="text-[#98a2b3] hover:text-[#b42318] font-semibold leading-none" aria-label="Remove dependency on ${esc(dep.name)}" onclick="removeDocDep(${i},'${dep.id}')">×</button></span>`;
         }).join('')}</div>
-        ${DOC_TASKS.some(x=>x.id!==t.id&&!(t.depends_on||[]).includes(x.id))?`<select class="mt-1 px-1.5 py-0.5 text-xs max-w-[170px]" aria-label="Add a dependency" onchange="addDocDep(${i},this.value)">
+        ${(t.suggested_deps||[]).length?`<div class="flex flex-wrap gap-1 mt-1">${(t.suggested_deps||[]).map(sd=>{
+          const dep=DOC_TASKS.find(x=>x.id===sd.id); if(!dep) return '';
+          return `<label class="person-chip ai-chip max-w-[200px]" title="${esc(sd.why||'AI guess')} — tick to add this dependency"><input type="checkbox" onchange="addDocDep(${i},'${dep.id}')"><span class="truncate">${esc(dep.name)}</span><span class="r">AI guess</span></label>`;
+        }).join('')}</div>`:''}
+        ${DOC_TASKS.some(x=>x.id!==t.id&&!(t.depends_on||[]).includes(x.id))?`<select class="mt-1 px-1.5 py-0.5 text-xs max-w-[200px]" aria-label="Add a dependency" onchange="addDocDep(${i},this.value)">
           <option value="">+ depends on…</option>${DOC_TASKS.filter(x=>x.id!==t.id&&!(t.depends_on||[]).includes(x.id)).map(x=>`<option value="${x.id}">${esc(x.name)}</option>`).join('')}</select>`:''}
       </td>
-      <td class="py-2 text-xs text-[#475467] min-w-[260px]">${esc(t.rationale||'')}${t.source?`<div class="text-[#98a2b3] mt-0.5 truncate max-w-[300px]" title="${esc(t.source)}">From: ${esc(t.source)}</div>`:''}${t.error?`<div class="text-rose-600 font-medium">${esc(t.error)}</div>`:''}${warn?`<div class="text-amber-700">${esc(warn)}</div>`:''}${t.fieldError&&!t.fieldError.includes('deadline')?`<div class="text-rose-600 font-medium">${esc(t.fieldError)}</div>`:''}</td>
+      <td class="py-2 text-xs text-[#475467] min-w-[240px] max-w-[320px] break-words">${esc(t.rationale||'')}${t.source?`<div class="text-[#98a2b3] mt-0.5 break-words max-w-[280px]" title="${esc(t.source)}">From: ${esc(t.source)}</div>`:''}${t.error?`<div class="text-rose-600 font-medium">${esc(t.error)}</div>`:''}${warn?`<div class="text-amber-700">${esc(warn)}</div>`:''}${t.fieldError&&!t.fieldError.includes('deadline')?`<div class="text-rose-600 font-medium">${esc(t.fieldError)}</div>`:''}</td>
     </tr>`;
   }).join('');
   const banner=(extraWarn||[]).map(w=>`<div class="note note-warn mb-2">${esc(w)}</div>`).join('');
+  const locked=DOC_FAILED.length>0 && !DOC_SKIP_FAILED;
   $('docWizard').innerHTML=`<div class="panel">
     ${banner}
+    ${failsPanel()}
     <div class="flex flex-wrap items-center justify-between gap-3 mb-3">
       <p class="text-sm text-[#344054] font-medium">${esc(summary||'')}</p>
       <label class="flex items-center gap-2 text-xs text-[#475467]">Plan as
@@ -1452,19 +1546,19 @@ function renderDocTasks(summary, extraWarn){
           <option value="simple" ${DOC_METHOD==='simple'?'selected':''}>Simple — every role for the whole package</option>
         </select></label>
     </div>
-    <div class="overflow-x-auto">
-      <table class="tbl">
+    <div class="overflow-x-auto max-w-full">
+      <table class="tbl min-w-[1040px]">
         <thead><tr>
-          <th class="py-1 font-semibold">Approve</th><th class="font-semibold">Work package</th><th class="font-semibold">Staffing</th>
-          <th class="font-semibold">Weeks</th><th class="font-semibold">Deadline</th><th class="font-semibold">Priority</th><th class="font-semibold" title="Stage due dates (waterfall only). Read from the document, never guessed">Stage dates</th><th class="font-semibold">Depends on</th><th class="font-semibold">Why this package</th>
+          <th class="py-1 font-semibold">Approve</th><th class="font-semibold min-w-[180px]">Work package</th><th class="font-semibold min-w-[150px] max-w-[180px]">Staffing</th>
+          <th class="font-semibold">Weeks</th><th class="font-semibold">Deadline</th><th class="font-semibold">Priority</th><th class="font-semibold min-w-[128px] max-w-[150px]" title="Stage due dates (waterfall only). Read from the document, never guessed">Stage dates</th><th class="font-semibold min-w-[160px] max-w-[220px]">Depends on</th><th class="font-semibold min-w-[240px] max-w-[320px]">Why this package</th>
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>
     <div class="mt-3 flex gap-2">
-      <button onclick="approveTasks()" class="btn btn-primary">Approve split, staff it</button>
+      <button onclick="approveTasks()" class="btn btn-primary ${locked?'opacity-50 cursor-not-allowed':''}" ${locked?'disabled title="Read the failed parts again or tick “Skip” first"':''}>Approve split, staff it</button>
       <button onclick="harvestDocTasks();DOC_TASKS.push(blankTask());renderDocTasks('Add a package by hand')" class="btn btn-ghost">Add package</button>
-      <button onclick="DOC_TASKS=[];$('docWizard').innerHTML='';$('docStepLabel').textContent='Step 1 / 2'" class="btn btn-ghost">Cancel</button>
+      <button onclick="DOC_TASKS=[];DOC_FAILED=[];DOC_SKIP_FAILED=false;$('docWizard').innerHTML='';$('docStepLabel').textContent='Step 1 / 2'" class="btn btn-ghost">Cancel</button>
     </div>
   </div>`;
 }
@@ -1518,6 +1612,10 @@ function validateDocTasks(){
 }
 
 async function approveTasks(){
+  if(DOC_FAILED.length && !DOC_SKIP_FAILED){
+    renderDocTasks('Read the failed parts again or tick “Skip — I will add those packages by hand” first');
+    return;
+  }
   harvestDocTasks();
   if(!validateDocTasks()){
     renderDocTasks('Fix the red fields and approve again');
@@ -1621,8 +1719,12 @@ async function applyDocStaff(){
   $('docWizard').innerHTML='<div class="loading">Saving to the plan…</div>';
   const d=await replan({add_projects: DOC_STAFF.projects, freeze_existing:true});
   if(d && !d.error){
+    const moved=(d.moved||[]).length;
+    const kept=moved
+      ? `${moved} existing project${moved===1?'':'s'} rescheduled to fit the new packages.`
+      : 'Existing assignments kept.';
     const extra=nUn?` ${nUn} package(s) unstaffable, marked in the table.`:'';
-    $('docWizard').innerHTML=`<div class="note note-ok">Approved. Existing assignments kept.${extra}</div>`;
+    $('docWizard').innerHTML=`<div class="note note-ok">Approved. ${esc(kept)}${extra}</div>`;
     $('docInput').value='';
     $('docStepLabel').textContent='Step 1 / 2';
     DOC_TASKS=[]; DOC_STAFF=null;

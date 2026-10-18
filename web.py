@@ -75,6 +75,7 @@ _llm_lock = threading.Lock()
 _llm_times: dict[str, list[float]] = {}
 _LLM_WINDOW_S = 60.0
 _LLM_MAX_GLOBAL = 8
+_LLM_MAX_RETRY = 16     # re-reading failed document parts keeps its own budget
 
 
 def _client_ip(handler) -> str:
@@ -87,10 +88,11 @@ def _client_ip(handler) -> str:
 def _llm_allowed(kind: str = "intake", ip: str = "") -> bool:
     now = time.time()
     ip = ip or "unknown"
+    limit = _LLM_MAX_RETRY if kind == "retry" else _LLM_MAX_GLOBAL
     with _llm_lock:
         bucket = _llm_times.setdefault(ip, [])
         bucket[:] = [t for t in bucket if now - t < _LLM_WINDOW_S]
-        if len(bucket) >= _LLM_MAX_GLOBAL:
+        if len(bucket) >= limit:
             return False
         bucket.append(now)
         return True
@@ -986,7 +988,10 @@ def _late_days(risk: dict | None) -> int:
         return 0
     if risk.get("late_days") is not None:
         return risk["late_days"]
-    return max(0, -(risk.get("days_left") or 0))
+    # same rule as ProjectRisk.late_days: the worst of the deadline and the
+    # stage due dates (a missed UAT date can be the real lateness)
+    return max([max(0, -(risk.get("days_left") or 0))]
+               + [max(0, -(m.get("days_left") or 0)) for m in risk.get("milestones") or []])
 
 
 def _change_reasons(before: dict, after: dict) -> dict[str, str]:
@@ -1264,7 +1269,7 @@ def _why_package_late(asg: dict, after: dict, prepared: list) -> str:
             dep_finish_w = max(dep_finish_w, int(dep_a["start_week"]) + dep_dur)
         dr = next((r for r in after.get("risks") or [] if r["project_id"] == dep), None)
         if dr and dr.get("risk") == "late":
-            dep_bits.append(f"depends on “{depn}” (late {abs(dr.get('days_left') or 0)} days)")
+            dep_bits.append(f"depends on “{depn}” (late {_late_days(dr)} days)")
         elif any(u["project_id"] == dep for u in after.get("unstaffable") or []):
             dep_bits.append(f"depends on “{depn}”, which is unstaffed")
     if dep_bits and start <= dep_finish_w:
@@ -1331,18 +1336,18 @@ def _plan_cost(result: dict) -> int:
 
 
 def _build_with_additions(people, projects, pins, sticky, freeze, new_ids: set,
-                          keep_squads: bool = False) -> tuple[dict, list[str]]:
+                          keep_squads: bool = False) -> tuple[dict, list[str], list[str]]:
     """Solve with the approved plan frozen; if a NEW project then ends up late
     or unstaffed, unlock the frozen projects that have not started yet and hold
     someone qualified for a role it needs, and keep that plan only if total
-    lateness drops. Returns (result, notes naming the moved projects)."""
+    lateness drops. Returns (result, notes naming the moved projects, moved names)."""
     first = build_result(people, projects, prev_assignments=sticky, pins=pins,
                          freeze=freeze, keep_squads=keep_squads)
     if not freeze or not new_ids:
-        return first, []
+        return first, [], []
     stuck = [r for r in first["risks"] if r["project_id"] in new_ids and r["risk"] in ("late", "unstaffable")]
     if not stuck:
-        return first, []
+        return first, [], []
     pmeta = {p.id: p for p in projects}
     need = {(role, pmeta[r["project_id"]].level_for(role))
             for r in stuck for role in pmeta[r["project_id"]].roles()}
@@ -1352,17 +1357,17 @@ def _build_with_additions(people, projects, pins, sticky, freeze, new_ids: set,
             if int(a.start_week) == 0
             or not qualified & {pid for pids in a.squad.values() for pid in (pids if isinstance(pids, list) else [pids])}]
     if len(keep) == len(freeze):
-        return first, []
+        return first, [], []
     second = build_result(people, projects, prev_assignments=sticky, pins=pins,
                           freeze=keep, keep_squads=keep_squads)
     if _plan_cost(second) >= _plan_cost(first):
-        return first, []
+        return first, [], []
     b = {a.project_id: (a.start_week, a.squad) for a in freeze}
     moved = [pmeta[a["project_id"]].name for a in second["assignments"]
              if a["project_id"] in b and (a["start_week"], a["squad"]) != b[a["project_id"]]]
     note = ("To fit the new work, existing projects that have not started yet were rescheduled: "
             + ", ".join(f"“{n}”" for n in moved) + f" (total late days {_plan_cost(first)} → {_plan_cost(second)})")
-    return second, [note] if moved else []
+    return second, ([note] if moved else []), moved
 
 
 def _scenario_options(before: dict, people, projects, pins, prev, selective) -> list[dict]:
@@ -1561,7 +1566,7 @@ class Handler(BaseHTTPRequestHandler):
                         self._json_status(400, {"error": [str(e)]})
                         return
                     before = _public(_saved(sess))
-                    after_full, notes = _build_with_additions(
+                    after_full, notes, moved = _build_with_additions(
                         people, projects, pins, sticky, freeze, _added_ids(body), keep)
                     after = _public(after_full)
                     self._json({
@@ -1570,6 +1575,7 @@ class Handler(BaseHTTPRequestHandler):
                         "before": before,
                         "after": after,
                         "notes": notes,
+                        "moved": moved,
                         "delta": _diff(before, after),
                     })
                     return
@@ -1579,12 +1585,13 @@ class Handler(BaseHTTPRequestHandler):
                     self._json_status(400, {"error": [str(e)]})
                     return
                 # same rule as the preview, so Apply saves what was reviewed
-                built, notes = _build_with_additions(
+                built, notes, moved = _build_with_additions(
                     sess["people"], sess["projects"], sess.get("pins"), sticky, freeze,
                     _added_ids(body), keep)
                 result = _commit(sess, built)
             # same bytes as /api/assign unless something needs saying
-            self._json({**_public(result), **({"notes": notes} if notes else {}), "gen": sess["gen"]})
+            self._json({**_public(result), **({"notes": notes} if notes else {}),
+                        **({"moved": moved} if moved else {}), "gen": sess["gen"]})
             return
         if path == "/api/reset":
             with sess["lock"]:
@@ -1642,11 +1649,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._json_status(400, {"error": "invalid JSON"})
                 return
             doc = (body.get("document") or body.get("brief") or "") if isinstance(body, dict) else ""
+            retry = bool(body.get("retry")) if isinstance(body, dict) else False
             if not str(doc).strip():
                 self._json({"error": "document is empty", "tasks": [], "manual": True})
                 return
             ip = _client_ip(self)
-            if not _llm_allowed("intake", ip):
+            if not _llm_allowed("retry" if retry else "intake", ip):
                 self._rate_limited(ip)
                 return
             out = copy.deepcopy(llm.decompose_document(str(doc), today=TODAY))
@@ -1706,7 +1714,7 @@ class Handler(BaseHTTPRequestHandler):
                     self._json_status(400, {"error": [str(e)]})
                     return
                 before = _public(_saved(sess))
-                after_full, relax_notes = _build_with_additions(
+                after_full, relax_notes, _ = _build_with_additions(
                     people, projects, pins, freeze, freeze, {p["id"] for p in prepared})
                 after = _public(after_full)
             new_ids = {p["id"] for p in prepared}

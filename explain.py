@@ -54,9 +54,17 @@ def explain_plan(plan: Plan, people: list[Person], projects: list[Project],
     if late:
         lines.append("LATE PROJECTS:")
         for r in late:
-            days = r.days_left if r.days_left is not None else 0
-            lines.append(f"  • {r.project.name} — LATE by {abs(days)} days "
-                         f"(done {r.done_date}, deadline {r.project.deadline.isoformat()})")
+            deadline = r.project.deadline.isoformat()
+            if r.days_left is not None and r.days_left < 0:
+                lines.append(f"  • {r.project.name} — LATE by {r.late_days} days "
+                             f"(done {r.done_date}, deadline {deadline})")
+            else:
+                lines.append(f"  • {r.project.name} — LATE by {r.late_days} days "
+                             f"(deadline {deadline} met, but a stage date is missed)")
+            for m in r.milestones or []:
+                if (m.get("days_left") or 0) < 0:
+                    lines.append(f"    stage “{m['stage']}” due {m['due']} "
+                                 f"(planned {m['planned']}) — late by {-m['days_left']} days")
         lines.append("")
 
     for a in sorted(plan.assignments, key=lambda x: x.start_week):
@@ -88,6 +96,7 @@ def explain_plan_llm(plan: Plan, people: list[Person], projects: list[Project],
         "Rewrite it as a short, natural explanation in English. "
         "Use only the facts in the log; do not invent anything. "
         "If the log has a LATE PROJECTS section, name those projects and how many days late. "
+        "If a late stage date is listed under a project, name that stage and its due date. "
         "Never say 'nobody is overloaded' or 'everything is on time' if the log lists a LATE project. "
         "Never say someone was picked as 'least senior' unless the log says exactly that.\n\n"
         + facts

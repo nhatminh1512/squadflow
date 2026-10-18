@@ -101,6 +101,8 @@ def test_rate_limit_blocks_burst():
     assert allowed == web._LLM_MAX_GLOBAL
     assert allowed < 40
     assert web._llm_allowed("explain", ip) is False
+    # re-reading failed document parts keeps its own, larger budget
+    assert web._llm_allowed("retry", ip) is True
     web._llm_times.clear()
     # A different IP still has budget.
     assert web._llm_allowed("explain", "198.51.100.2") is True
@@ -351,8 +353,9 @@ def test_approve_then_assign_is_byte_identical():
         assert "assignments" in approved, approved
         cl.post("/api/suggest")
         again_raw, again = cl.post("/api/assign")
-        # the approve response may add one-off "notes" (projects moved to fit); the plan itself is identical
-        assert again == {k: v for k, v in approved.items() if k != "notes"}, \
+        # the approve response may add one-off "notes"/"moved" (projects moved
+        # to fit); the saved plan itself is identical
+        assert again == {k: v for k, v in approved.items() if k not in ("notes", "moved")}, \
             "assign after approve must return the saved plan unchanged"
         again2_raw, _ = cl.post("/api/assign")
         assert again2_raw == again_raw
@@ -526,8 +529,9 @@ def test_long_document_is_read_in_parts_and_merged():
     names = [t["name"] for t in out["tasks"]]
     assert names == ["Payment gateway", "Mobile app"], names          # the two gateway mentions merged
     gw, app = out["tasks"]
-    assert gw["required"]["engineer"] == {"level": 5, "count": 2}     # max of both parts
-    assert gw["duration_weeks"] == 14 and gw["deadline"] == "2027-01-20"
+    assert gw["required"]["engineer"] == {"level": 4, "count": 2}     # first/own reading wins, never maxed
+    assert gw["required"]["pm"] == {"level": 4, "count": 1}
+    assert gw["duration_weeks"] == 12 and gw["deadline"] == "2027-01-20"
     assert app["depends_on"] == [gw["id"]]
     assert gw["milestones"] == {"uat": "2026-12-15", "deploy": "2027-01-20"}, gw.get("milestones")
     assert "2. Payment gateway" in gw["source"] and "Long document" in out["warnings"][0]
@@ -655,9 +659,13 @@ def test_prd_with_several_packages_gets_dates_sources_and_dependency_order():
     out = _fake_decompose(PRD, PRD_TASKS)
     by = {t["name"]: t for t in out["tasks"]}
     assert list(by) == ["Payment gateway", "Partner API", "Security audit", "Audit logging"], list(by)
-    # 1: project-wide stage dates reach every package; schedules / appendix are not packages
-    for t in by.values():
-        assert t["milestones"] == {"uat": "2026-12-15", "deploy": "2027-01-20"}, t
+    # 1: project-wide stage dates reach packages whose own text states none;
+    # a shared go-live that contradicts a document dependency is not assigned
+    for name in ("Partner API", "Audit logging"):
+        assert by[name]["milestones"] == {"uat": "2026-12-15", "deploy": "2027-01-20"}, by[name]
+    for name in ("Payment gateway", "Security audit"):
+        assert "milestones" not in by[name], (name, by[name])
+        assert any("after “Partner API” starts" in w for w in by[name]["warnings"]), by[name]["warnings"]
     assert "Release timeline" in out["warnings"][-1] and "appendix" in out["warnings"][-1]
     # 3: source = the package's own heading, without markdown marks
     assert by["Payment gateway"]["source"] == "2.1 Payment gateway"
@@ -680,12 +688,298 @@ def test_roles_the_section_does_not_staff_are_removed():
     assert any("pm removed" in w for w in t["warnings"]) and any("analyst removed" in w for w in t["warnings"])
 
 
-def test_over_the_cap_keeps_go_live_work_in_document_order():
+def test_over_the_cap_keeps_the_best_supported_packages():
     out = _fake_decompose(PRD, PRD_TASKS, cap=3)
     names = [t["name"] for t in out["tasks"]]
-    # Audit logging (no go-live / must wording) is the one cut, not the security audit
-    assert names == ["Payment gateway", "Partner API", "Security audit"], names
-    assert "Audit logging (over the 3-package limit)" in out["warnings"][-1]
+    # all four have their own section; the audit logging package has a staffing
+    # phrase ("Engineer 3") while the security audit has only stage wording, so
+    # it is the one cut — and the reason carries its score
+    assert names == ["Payment gateway", "Partner API", "Audit logging"], names
+    assert "Security audit (over the 3-package limit, score 6" in out["warnings"][-1], out["warnings"][-1]
+
+
+def test_overview_fragments_do_not_take_the_package_cap():
+    """25 packages, 10 of them read under “1. Tổng quan / 1.1 / 1.2”: the four
+    main 2.x packages stay in the 20 kept, and the drop reason carries a score."""
+    import llm
+    overview = ["Customer onboarding", "Merchant directory", "Fee calculation",
+                "Fraud screening", "Settlement reports", "Refund handling",
+                "Dispute tracking", "Currency conversion", "Statement export",
+                "Notification centre"]
+    main = ["Payment gateway", "Partner API", "Security audit", "Audit logging"]
+    other = ["Ledger service", "Card vault", "Tokenisation", "Terminal fleet",
+             "Batch uploader", "Reconciliation", "Chargeback API", "Merchant portal",
+             "Sandbox tools", "Webhook relay", "Data warehouse"]
+    lines = ["# Big PRD\n", "## 1. Tổng quan\nIntro of the whole programme.\n",
+             "### 1.1 Bối cảnh\n"]
+    packages = []
+    for name in overview[:4]:
+        ev = f"{name}. 1 engineer for 2 weeks. UAT by 15/12."
+        lines.append(f"- {ev}\n")
+        packages.append({"name": name, "duration_weeks": 2, "deadline": "2027-01-10",
+                         "required": {"engineer": {"level": 3}}, "evidence": ev})
+    lines.append("### 1.2 Mục tiêu\n")
+    for name in overview[4:]:
+        ev = f"{name}. 1 engineer for 2 weeks. UAT by 15/12."
+        lines.append(f"- {ev}\n")
+        packages.append({"name": name, "duration_weeks": 2, "deadline": "2027-01-10",
+                         "required": {"engineer": {"level": 3}}, "evidence": ev})
+    lines.append("## 2. Phạm vi\n")
+    for i, name in enumerate(main, 1):
+        ev = f"{name}. PM level 4, 2 senior engineers, QA 3, 8 weeks."
+        lines.append(f"### 2.{i} {name}\n{ev}\n")
+        packages.append({"name": name, "duration_weeks": 8, "deadline": "2027-01-10",
+                         "priority": 4, "required": {"pm": {"level": 4},
+                                                     "engineer": {"level": 4, "count": 2},
+                                                     "qa": {"level": 3}}, "evidence": ev})
+    lines.append("## 3. Delivery\n")
+    for i, name in enumerate(other, 1):
+        ev = f"{name}. 1 QA for 3 weeks."
+        lines.append(f"### 3.{i} {name}\n{ev}\n")
+        packages.append({"name": name, "duration_weeks": 3, "deadline": "2027-01-10",
+                         "required": {"qa": {"level": 3}}, "evidence": ev})
+    lines.append("## 4. Notes\n" + ("Additional background detail. " * 800) + "\n")
+    doc = "".join(lines)
+    assert len(doc) > llm.SINGLE_PASS_CHARS and len(packages) == 25
+    out = _fake_decompose(doc, packages)
+    names = [t["name"] for t in out["tasks"]]
+    assert len(names) == 20, (len(names), names)
+    assert all(n in names for n in main), names
+    omitted = " ".join(out["omitted"])
+    assert "overview section" in omitted and "score" in omitted, omitted
+
+
+def test_overview_duplicate_merges_into_the_section_package():
+    """The overview mentions the same deliverable; the content section keeps the
+    values (2 engineers, 8 weeks), the overview reading is only a duplicate."""
+    doc = ("# PRD\n\n## 1. Tổng quan\nWe will build the Payment gateway first.\n\n"
+           "## 2. Scope\n### 2.1 Payment gateway\n2 engineer level 4, 8 weeks. UAT 10/12.\n")
+    packages = [
+        {"name": "Payment gateway", "duration_weeks": 4, "deadline": "2027-01-01",
+         "priority": 5, "required": {"engineer": {"level": 3, "count": 1},
+                                      "qa": {"level": 3, "count": 3}},
+         "evidence": "We will build the Payment gateway first."},
+        {"name": "Payment gateway", "duration_weeks": 8, "deadline": "2027-01-10",
+         "required": {"engineer": {"level": 4, "count": 2}},
+         "evidence": "2 engineer level 4, 8 weeks."},
+    ]
+    out = _fake_decompose(doc, packages)
+    assert len(out["tasks"]) == 1, out["tasks"]
+    gw = out["tasks"][0]
+    assert gw["duration_weeks"] == 8 and gw["required"] == {"engineer": {"level": 4, "count": 2}}
+    assert gw["source"] == "2.1 Payment gateway" and gw["milestones"] == {"uat": "2026-12-10"}
+
+
+def test_parent_intro_does_not_overwrite_child_staffing():
+    """The package is named in the parent intro (“Đội dự án gồm 1 engineer…”)
+    but has a 2.1 section: the child section supplies the staffing (2 engineers),
+    not the intro; roles the child does not staff are removed."""
+    doc = ("# PRD\n\n## 1. Tổng quan\nIntro.\n\n## 2. Phạm vi\n"
+           "Đội dự án gồm 1 engineer senior, 2 QA và 1 PM.\n\n"
+           "### 2.1 Cổng thanh toán\n2 engineer level 4, 8 tuần. UAT 10/12.\n")
+    packages = [{"name": "Cổng thanh toán", "duration_weeks": 8, "deadline": "2027-01-10",
+                 "required": {"engineer": {"level": 4, "count": 1},
+                              "qa": {"level": 3, "count": 2},
+                              "pm": {"level": 3, "count": 1}},
+                 "evidence": "Đội dự án gồm 1 engineer senior, 2 QA và 1 PM."}]
+    out = _fake_decompose(doc, packages)
+    t = out["tasks"][0]
+    assert t["required"] == {"engineer": {"level": 4, "count": 2}}, t["required"]
+    assert t["source"] == "2.1 Cổng thanh toán"
+    assert t["milestones"] == {"uat": "2026-12-10"}, t["milestones"]
+    assert not any("section intro" in w for w in t["warnings"]), t["warnings"]
+
+
+def test_ai_dependencies_are_suggestions_until_the_document_confirms_them():
+    """depends_on_names without an ordering sentence: the solver sees no edge;
+    the package carries it as a suggested dependency instead."""
+    doc = "# P\n\n## 1. Alpha\nAlpha does X.\n\n## 2. Beta\nBeta does Y.\n"
+    packages = [
+        {"name": "Alpha", "duration_weeks": 3, "deadline": "2027-01-10",
+         "required": {"engineer": {"level": 3}}, "depends_on": ["Beta"],
+         "evidence": "Alpha does X."},
+        {"name": "Beta", "duration_weeks": 3, "deadline": "2027-01-10",
+         "required": {"engineer": {"level": 3}}, "evidence": "Beta does Y."},
+    ]
+    out = _fake_decompose(doc, packages)
+    by = {t["name"]: t for t in out["tasks"]}
+    assert by["Alpha"]["depends_on"] == []
+    assert [s["id"] for s in by["Alpha"]["suggested_deps"]] == [by["Beta"]["id"]]
+    assert by["Alpha"]["suggested_deps"][0]["why"] == "AI guess"
+    assert by["Beta"]["depends_on"] == [] and by["Beta"]["suggested_deps"] == []
+
+
+def test_shared_milestone_contradicting_a_document_dependency_is_dropped():
+    """Alpha must finish before Beta; the project-wide go-live (15/03) cannot
+    be Alpha's own date when Beta's UAT is 01/02. Alpha gets no dates and a
+    warning; the unrelated Gamma still takes the shared go-live."""
+    doc = ("# P\n\n## 1. Timeline\nGo-live 15/03/2027.\n\n"
+           "## 2. Alpha\nAlpha does X. Alpha must finish before Beta starts.\n\n"
+           "## 3. Beta\nBeta does Y. UAT 01/02/2027.\n\n"
+           "## 4. Gamma\nGamma does G.\n")
+    packages = [
+        {"name": "Alpha", "duration_weeks": 3, "deadline": "2027-05-01",
+         "required": {"engineer": {"level": 3}}, "evidence": "Alpha does X."},
+        {"name": "Beta", "duration_weeks": 3, "deadline": "2027-05-01",
+         "required": {"engineer": {"level": 3}}, "evidence": "Beta does Y."},
+        {"name": "Gamma", "duration_weeks": 3, "deadline": "2027-05-01",
+         "required": {"engineer": {"level": 3}}, "evidence": "Gamma does G."},
+    ]
+    out = _fake_decompose(doc, packages)
+    by = {t["name"]: t for t in out["tasks"]}
+    assert by["Beta"]["depends_on"] == [by["Alpha"]["id"]], by["Beta"]
+    assert "milestones" not in by["Alpha"], by["Alpha"]
+    assert any("after “Beta” starts (2027-02-01)" in w for w in by["Alpha"]["warnings"]), by["Alpha"]["warnings"]
+    assert by["Gamma"]["milestones"] == {"deploy": "2027-03-15"}, by["Gamma"]
+
+
+def test_package_without_any_stage_dates_is_flagged():
+    doc = "# P\n\n## 1. Delta\nDelta does D.\n"
+    out = _fake_decompose(doc, [{"name": "Delta", "duration_weeks": 2,
+                                 "deadline": "2027-01-10", "evidence": "Delta does D.",
+                                 "required": {"engineer": {"level": 3}}}])
+    t = out["tasks"][0]
+    assert any("no stage dates in the document" in w for w in t["warnings"]), t["warnings"]
+
+
+def test_ids_follow_the_package_name_and_cut_at_word_boundaries():
+    import llm
+    assert llm._slug("Payment gateway integration and certification", max_len=24) == "payment-gateway"
+    assert llm._slug("A very long package name that would be cut in the middle of a word",
+                     max_len=30) == "a-very-long-package-name-that"
+    doc = "# P\n\n## 2.1 Deliverables\nPartner API. 1 engineer for 2 weeks. UAT 10/12.\n"
+    out = _fake_decompose(doc, [{"name": "Partner API", "duration_weeks": 2,
+                                 "deadline": "2027-01-10",
+                                 "evidence": "Partner API. 1 engineer for 2 weeks. UAT 10/12.",
+                                 "required": {"engineer": {"level": 3}}}])
+    assert out["tasks"][0]["id"] == "doc-2-1-partner-api", out["tasks"][0]["id"]
+
+
+def test_complete_retries_429_with_retry_after():
+    """A 429 with Retry-After: 1 is waited out and retried, not converted into
+    an immediate plain-JSON call."""
+    import io
+    import os
+    import urllib.error
+    import llm
+    calls, sleeps = [], []
+
+    class Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b'{"choices":[{"message":{"content":"ok"}}]}'
+
+    def fake_urlopen(req, timeout=0):
+        calls.append(timeout)
+        if len(calls) == 1:
+            raise urllib.error.HTTPError(req.full_url, 429, "rate",
+                                        {"Retry-After": "1"}, io.BytesIO(b""))
+        return Resp()
+
+    old_key = os.environ.get("DEEPSEEK_API_KEY")
+    os.environ["DEEPSEEK_API_KEY"] = "test"
+    orig_open, orig_sleep = llm.urllib.request.urlopen, llm.time.sleep
+    llm.urllib.request.urlopen = fake_urlopen
+    llm.time.sleep = lambda s: sleeps.append(s)
+    try:
+        assert llm.complete([{"role": "user", "content": "hi"}], json_mode=True) == "ok"
+    finally:
+        llm.urllib.request.urlopen = orig_open
+        llm.time.sleep = orig_sleep
+        if old_key is None:
+            os.environ.pop("DEEPSEEK_API_KEY", None)
+        else:
+            os.environ["DEEPSEEK_API_KEY"] = old_key
+    assert len(calls) == 2, calls
+    assert sleeps and abs(sleeps[0] - 1.0) < 0.01, sleeps
+
+
+def test_complete_gives_up_after_three_429_retries():
+    """One initial call + three retries, then the HTTP error is raised so the
+    part is reported in failed_parts."""
+    import io
+    import os
+    import urllib.error
+    import llm
+    calls = []
+
+    def fake_urlopen(req, timeout=0):
+        calls.append(1)
+        raise urllib.error.HTTPError(req.full_url, 429, "rate",
+                                    {"Retry-After": "0"}, io.BytesIO(b""))
+
+    old_key = os.environ.get("DEEPSEEK_API_KEY")
+    os.environ["DEEPSEEK_API_KEY"] = "test"
+    orig_open, orig_sleep = llm.urllib.request.urlopen, llm.time.sleep
+    llm.urllib.request.urlopen = fake_urlopen
+    llm.time.sleep = lambda s: None
+    try:
+        try:
+            llm.complete([{"role": "user", "content": "hi"}], json_mode=True)
+            raise AssertionError("complete should raise after the retries")
+        except urllib.error.HTTPError as e:
+            assert e.code == 429
+    finally:
+        llm.urllib.request.urlopen = orig_open
+        llm.time.sleep = orig_sleep
+        if old_key is None:
+            os.environ.pop("DEEPSEEK_API_KEY", None)
+        else:
+            os.environ["DEEPSEEK_API_KEY"] = old_key
+    assert len(calls) == 4, calls
+
+
+def test_failed_part_is_reported_and_retried_from_cache():
+    """One part fails: its title + a real reason are returned in failed_parts,
+    the good parts are cached, and a retry asks the AI only for the failed part."""
+    import urllib.error
+    import llm
+    doc = "".join(
+        f"## {i}. Section {i}\nPackage {i}. 1 engineer for 2 weeks. UAT by 15/12.\n\n"
+        + ("Filler sentence. " * 300) + "\n\n"
+        for i in (1, 2, 3)
+    )
+    assert len(doc) > llm.SINGLE_PASS_CHARS
+    calls = []
+
+    def fake_part(title):
+        return {"summary": "s", "tasks": [{
+            "name": title.split(". ", 1)[-1], "duration_weeks": 2, "deadline": "2027-01-10",
+            "required": {"engineer": {"level": 3}}, "evidence": "UAT by 15/12."}]}
+
+    def fake_fail(skill, today, part, idx, n, outline, total, deadline=None):
+        calls.append(part[0])
+        if part[0].startswith("2."):
+            raise urllib.error.HTTPError("u", 429, "rate", {}, None)
+        return fake_part(part[0])
+
+    def fake_ok(skill, today, part, idx, n, outline, total, deadline=None):
+        calls.append(part[0])
+        return fake_part(part[0])
+
+    orig_call, orig_sleep = llm._call_part, llm.time.sleep
+    llm.time.sleep = lambda s: None
+    llm._CACHE.clear()
+    try:
+        llm._call_part = fake_fail
+        first = llm.decompose_document(doc, today=TODAY)
+        assert {t["name"] for t in first["tasks"]} == {"Section 1", "Section 3"}
+        assert len(first["failed_parts"]) == 1, first["failed_parts"]
+        assert first["failed_parts"][0]["title"] == "2. Section 2"
+        assert "HTTP 429" in first["failed_parts"][0]["error"]
+        calls.clear()
+        llm._call_part = fake_ok
+        second = llm.decompose_document(doc, today=TODAY)
+    finally:
+        llm._call_part, llm.time.sleep = orig_call, orig_sleep
+    assert {t["name"] for t in second["tasks"]} == {"Section 1", "Section 2", "Section 3"}
+    assert second["failed_parts"] == []
+    assert calls == ["2. Section 2"], calls
 
 
 def test_new_urgent_work_can_move_a_project_that_has_not_started():
@@ -696,14 +990,16 @@ def test_new_urgent_work_can_move_a_project_that_has_not_started():
     new = Project.from_dict({"id": "new", "name": "New", "duration_weeks": 4, "deadline": "2026-11-13",
                              "priority": 5, "required": {"qa": {"level": 3}}})
     frozen = [Assignment("old", 1, {"qa": ["q"]})]
-    result, notes = web._build_with_additions([q], [old, new], [], frozen, frozen, {"new"})
+    result, notes, moved = web._build_with_additions([q], [old, new], [], frozen, frozen, {"new"})
     start = {a["project_id"]: a["start_week"] for a in result["assignments"]}
     assert start["new"] == 0 and start["old"] >= 4, start
     assert notes and "“Old”" in notes[0]
+    assert moved == ["Old"], moved          # the approve API reports what it moved
     # a project already running (starts this week) is never moved
     running = [Assignment("old", 0, {"qa": ["q"]})]
-    result, notes = web._build_with_additions([q], [old, new], [], running, running, {"new"})
+    result, notes, moved = web._build_with_additions([q], [old, new], [], running, running, {"new"})
     assert {a["project_id"]: a["start_week"] for a in result["assignments"]}["old"] == 0 and not notes
+    assert moved == []
 
 
 def test_change_made_before_a_reset_does_not_land_after_it():
@@ -774,6 +1070,263 @@ def test_utilization_uses_active_window_and_upskill_is_offered():
     assert upskill["total_late_days"] < 77
 
 
+def test_merging_one_package_never_inflates_headcount():
+    """A second reading from another part may not max level/count/duration:
+    the quoted reading in the home span wins, and the home text's own
+    '1 engineer and 1 QA' pulls the headcount back to 1 + 1."""
+    import llm
+    doc = ("# Programme\n\n## 1. Partner API\n"
+           "Partner API: 1 engineer and 1 QA for 6 weeks. This is the main deliverable.\n\n"
+           + "Scope detail. " * 3000
+           + "\n\nAdditional notes. The team will refine the scope.\n")
+    calls = []
+
+    def fake(messages, **kw):
+        part = messages[-1]["content"]
+        calls.append(part)
+        tasks = []
+        if "1 engineer and 1 QA" in part:
+            tasks.append({"name": "Partner API", "duration_weeks": 6, "deadline": "2027-01-15",
+                          "required": {"engineer": {"level": 3, "count": 1},
+                                       "qa": {"level": 3, "count": 1}},
+                          "evidence": "Partner API: 1 engineer and 1 QA for 6 weeks."})
+        if "Additional notes" in part:
+            tasks.append({"name": "Partner API", "duration_weeks": 9, "deadline": "2027-03-01",
+                          "required": {"engineer": {"level": 5, "count": 2},
+                                       "qa": {"level": 4, "count": 3}},
+                          "evidence": "Additional notes. The team will refine the scope."})
+        return {"summary": "part", "tasks": tasks}
+
+    orig, llm.complete_json = llm.complete_json, fake
+    llm._CACHE.clear()
+    try:
+        out = llm.decompose_document(doc, today=TODAY)
+    finally:
+        llm.complete_json = orig
+    assert len(calls) >= 2 and out["parts"] >= 2
+    assert len(out["tasks"]) == 1, out["tasks"]
+    t = out["tasks"][0]
+    assert t["required"]["engineer"] == {"level": 3, "count": 1}, t["required"]
+    assert t["required"]["qa"] == {"level": 3, "count": 1}, t["required"]
+    assert t["duration_weeks"] == 6 and t["deadline"] == "2027-01-15"
+
+
+def test_documented_order_keeps_ai_edges_out_of_the_graph():
+    """Alpha→Beta→Gamma guessed by the model: those stay suggestions. The
+    document's own sentence (Alpha before Gamma) is the only edge the solver
+    gets, so the guessed cycle cannot reach it."""
+    import llm
+    doc = ("1. Alpha\nAlpha does X. Alpha must finish before Gamma starts.\n\n"
+           "2. Beta\nBeta does Y.\n\n"
+           "3. Gamma\nGamma does Z.\n")
+    packages = [
+        {"name": "Alpha", "duration_weeks": 3, "deadline": "2027-01-10",
+         "required": {"engineer": {"level": 3}}, "depends_on": ["Beta"],
+         "evidence": "Alpha does X. Alpha must finish before Gamma starts."},
+        {"name": "Beta", "duration_weeks": 3, "deadline": "2027-01-10",
+         "required": {"engineer": {"level": 3}}, "depends_on": ["Gamma"],
+         "evidence": "Beta does Y."},
+        {"name": "Gamma", "duration_weeks": 3, "deadline": "2027-01-10",
+         "required": {"engineer": {"level": 3}}, "evidence": "Gamma does Z."},
+    ]
+
+    def fake(messages, **kw):
+        part = messages[-1]["content"]
+        return {"summary": "s", "tasks": [t for t in packages if t["evidence"] in part]}
+
+    orig, llm.complete_json = llm.complete_json, fake
+    llm._CACHE.clear()
+    try:
+        out = llm.decompose_document(doc, today=TODAY)
+    finally:
+        llm.complete_json = orig
+    by = {t["name"]: t for t in out["tasks"]}
+    assert by["Alpha"]["depends_on"] == [], by["Alpha"]
+    assert by["Beta"]["depends_on"] == [], by["Beta"]
+    assert by["Gamma"]["depends_on"] == [by["Alpha"]["id"]], by["Gamma"]
+    assert [s["id"] for s in by["Alpha"]["suggested_deps"]] == [by["Beta"]["id"]]
+    assert [s["id"] for s in by["Beta"]["suggested_deps"]] == [by["Gamma"]["id"]]
+    assert by["Gamma"]["suggested_deps"] == []
+    warnings = [w for t in out["tasks"] for w in t["warnings"]]
+    assert any("from the document" in w for w in warnings), warnings
+    assert not any("check by hand" in w for w in warnings), warnings
+
+
+def test_adding_a_sentence_keeps_other_ids_and_part_cache():
+    """Part boundaries follow headings: a new sentence in Alpha re-reads only
+    Alpha; Beta/Gamma keep their cache entries and their package ids."""
+    import llm
+    base = ("# Programme\n\n## 1. Alpha\nAlpha deliverable. 1 engineer for 4 weeks. UAT by 15/12.\n\n"
+            + "Alpha detail. " * 900
+            + "\n\n## 2. Beta\nBeta deliverable. 1 QA for 3 weeks. UAT by 20/12.\n\n"
+            + "Beta detail. " * 900
+            + "\n\n## 3. Gamma\nGamma deliverable. 1 engineer for 2 weeks. UAT by 25/12.\n\n"
+            + "Gamma detail. " * 900)
+    changed = base.replace("## 1. Alpha\nAlpha deliverable.",
+                           "## 1. Alpha\nAlpha deliverable, now clearer.")
+    assert changed != base and len(base) > llm.SINGLE_PASS_CHARS
+    calls = []
+
+    def fake(messages, **kw):
+        part = messages[-1]["content"]
+        calls.append(part)
+        for name, heading, line, req in [
+            ("Alpha", "## 1. Alpha", "1 engineer for 4 weeks.", {"engineer": {"level": 3}}),
+            ("Beta", "## 2. Beta", "1 QA for 3 weeks.", {"qa": {"level": 3}}),
+            ("Gamma", "## 3. Gamma", "1 engineer for 2 weeks.", {"engineer": {"level": 3}}),
+        ]:
+            if heading in part:
+                return {"summary": "s", "tasks": [{"name": name, "duration_weeks": 4,
+                                                   "deadline": "2027-01-10", "required": req,
+                                                   "evidence": line}]}
+        return {"summary": "s", "tasks": []}
+
+    orig, llm.complete_json = llm.complete_json, fake
+    llm._CACHE.clear()
+    try:
+        first = llm.decompose_document(base, today=TODAY)
+        n_first = len(calls)
+        ids_first = [t["id"] for t in first["tasks"]]
+        second = llm.decompose_document(changed, today=TODAY)
+        rerun = calls[n_first:]
+    finally:
+        llm.complete_json = orig
+    assert [t["id"] for t in second["tasks"]] == ids_first
+    assert [t["name"] for t in second["tasks"]] == ["Alpha", "Beta", "Gamma"]
+    assert len(rerun) == 1, len(rerun)
+    assert "Part — 1. Alpha:" in rerun[0]
+    assert "Part — 2. Beta:" not in rerun[0] and "Part — 3. Gamma:" not in rerun[0]
+
+
+def test_bullets_under_one_heading_get_their_own_milestones_and_source():
+    """Three packages in one section: each reads the stage dates from its own
+    bullet, and the source is that bullet - never the shared section title."""
+    import llm
+    doc = ("# PayHub programme\n\n"
+           "- Payments core. 1 engineer. UAT by 15/12.\n"
+           "- Partner API. 1 engineer and 1 QA. UAT by 20/12; go-live 10/01/2027.\n"
+           "- Audit module. 1 engineer. Go-live 25/01/2027.\n")
+    packages = [
+        {"name": "Payments core", "duration_weeks": 4, "deadline": "2027-01-10",
+         "required": {"engineer": {"level": 3}},
+         "evidence": "Payments core. 1 engineer. UAT by 15/12."},
+        {"name": "Partner API", "duration_weeks": 6, "deadline": "2027-01-10",
+         "required": {"engineer": {"level": 3}, "qa": {"level": 3}},
+         "evidence": "Partner API. 1 engineer and 1 QA. UAT by 20/12; go-live 10/01/2027."},
+        {"name": "Audit module", "duration_weeks": 3, "deadline": "2027-01-25",
+         "required": {"engineer": {"level": 3}},
+         "evidence": "Audit module. 1 engineer. Go-live 25/01/2027."},
+        # no quote: it must not inherit the first bullet's stage dates
+        {"name": "Mystery module", "duration_weeks": 2, "deadline": "2027-02-01",
+         "required": {"engineer": {"level": 3}},
+         "evidence": "This sentence is not in the document."},
+    ]
+
+    def fake(messages, **kw):
+        part = messages[-1]["content"]
+        tasks = [t for t in packages if t["evidence"] in part]
+        tasks += [t for t in packages if t["name"] == "Mystery module"]
+        return {"summary": "s", "tasks": tasks}
+
+    orig, llm.complete_json = llm.complete_json, fake
+    llm._CACHE.clear()
+    try:
+        out = llm.decompose_document(doc, today=TODAY)
+    finally:
+        llm.complete_json = orig
+    by = {t["name"]: t for t in out["tasks"]}
+    assert by["Payments core"]["milestones"] == {"uat": "2026-12-15"}
+    assert by["Partner API"]["milestones"] == {"uat": "2026-12-20", "deploy": "2027-01-10"}
+    assert by["Audit module"]["milestones"] == {"deploy": "2027-01-25"}
+    for name, t in by.items():
+        if name == "Mystery module":
+            continue
+        assert t["source"] != "PayHub programme", (name, t["source"])
+        assert t["source"].startswith(name), (name, t["source"])
+    mystery = by["Mystery module"]
+    assert "milestones" not in mystery, mystery.get("milestones")
+    assert mystery["source"] == "", mystery["source"]
+    assert any("no quote found" in w for w in mystery["warnings"]), mystery["warnings"]
+
+
+
+def test_a_bare_analyst_mention_does_not_keep_the_role():
+    """'phân tích' in prose is not staffing: only a number + role keeps it."""
+    doc = ("# PRD\n\n## 1. Integration\n"
+           "1 engineer and 1 QA. The analyst will review the data.\n")
+    tasks = [{"name": "Integration", "duration_weeks": 3, "deadline": "2027-01-10",
+              "required": {"analyst": {"level": 3}, "engineer": {"level": 3},
+                           "qa": {"level": 3}},
+              "evidence": "1 engineer and 1 QA."}]
+    out = _fake_decompose(doc, tasks)
+    assert out["tasks"][0]["required"] == {
+        "engineer": {"level": 3, "count": 1},
+        "qa": {"level": 3, "count": 1},
+    }, out["tasks"][0]["required"]
+    assert any("analyst removed" in w for w in out["tasks"][0]["warnings"])
+
+
+def test_risk_sections_and_stage_only_names_are_not_packages():
+    """Risks/assumptions sections are context; a name that is only a delivery
+    stage (Vietnamese or English) is dropped instead of becoming a package."""
+    import llm
+    doc = ("# PRD\n\n"
+           "## Risks and assumptions\nProject risk list. Assumption A.\n\n"
+           "## UAT and go-live of the whole system\nOne engineer. UAT 15/12.\n\n"
+           "## 1. Payments core\n1 engineer and 1 QA. UAT 20/12.\n")
+    tasks = [
+        {"name": "Risks and assumptions", "duration_weeks": 1, "deadline": "2027-01-10",
+         "required": {"engineer": {"level": 3}},
+         "evidence": "Project risk list. Assumption A."},
+        {"name": "Giai đoạn UAT và go-live toàn hệ thống", "duration_weeks": 1,
+         "deadline": "2027-01-10", "required": {"engineer": {"level": 3}},
+         "evidence": "One engineer. UAT 15/12."},
+        {"name": "Payments core", "duration_weeks": 4, "deadline": "2027-01-10",
+         "required": {"engineer": {"level": 3}, "qa": {"level": 3}},
+         "evidence": "1 engineer and 1 QA. UAT 20/12."},
+    ]
+
+    def fake(messages, **kw):
+        part = messages[-1]["content"]
+        return {"summary": "s", "tasks": [t for t in tasks if t["evidence"] in part]}
+
+    orig, llm.complete_json = llm.complete_json, fake
+    llm._CACHE.clear()
+    try:
+        out = llm.decompose_document(doc, today=TODAY)
+    finally:
+        llm.complete_json = orig
+    assert [t["name"] for t in out["tasks"]] == ["Payments core"], out["tasks"]
+    joined = " ".join(out["warnings"])
+    assert "Risks and assumptions (appendix / cross-cutting section" in joined, joined
+    assert "a delivery stage" in joined, joined
+    assert out["tasks"][0]["milestones"] == {"uat": "2026-12-20"}
+
+
+def test_explain_late_days_uses_the_missed_stage_date():
+    """A project late only by a stage date is late by that gap, not by the
+    (positive) distance to the deadline; the stage and its due date are named."""
+    import explain
+    from analysis import ProjectRisk
+    from models import Plan, Project
+    w = Project.from_dict({"id": "w", "name": "W", "duration_weeks": 2,
+                           "deadline": "2026-12-31", "required": {"engineer": {"level": 3}}})
+    plan = Plan(start_date=TODAY, horizon_weeks=10, assignments=[],
+                unstaffable=[("w", "no slot")])
+    risk = ProjectRisk(w, "late", start_week=0, done_week=1, done_date="2026-11-06",
+                       days_left=55,
+                       milestones=[{"stage": "uat", "due": "2026-12-01",
+                                    "planned": "2026-12-10", "days_left": -9}])
+    text = explain.explain_plan(plan, [], [w], [risk])
+    assert "LATE by 9 days" in text, text
+    assert "LATE by 55 days" not in text, text
+    assert "stage “uat” due 2026-12-01" in text, text
+    assert "late by 9 days" in text, text
+    # the web-side fallback (no precomputed late_days) uses the stage too
+    assert web._late_days({"risk": "late", "days_left": 55,
+                           "milestones": [{"days_left": -9}]}) == 9
+
+
 if __name__ == "__main__":
     test_freeze_keeps_old_plan_identical()
     print("ok freeze")
@@ -815,8 +1368,28 @@ if __name__ == "__main__":
     print("ok waterfall")
     test_prd_with_several_packages_gets_dates_sources_and_dependency_order()
     print("ok PRD dates/sources/deps")
-    test_over_the_cap_keeps_go_live_work_in_document_order()
+    test_over_the_cap_keeps_the_best_supported_packages()
     print("ok cap keeps go-live work")
+    test_overview_fragments_do_not_take_the_package_cap()
+    print("ok overview cap")
+    test_overview_duplicate_merges_into_the_section_package()
+    print("ok overview duplicate merge")
+    test_parent_intro_does_not_overwrite_child_staffing()
+    print("ok parent intro vs child staffing")
+    test_ai_dependencies_are_suggestions_until_the_document_confirms_them()
+    print("ok AI deps are suggestions")
+    test_shared_milestone_contradicting_a_document_dependency_is_dropped()
+    print("ok shared milestone conflict")
+    test_package_without_any_stage_dates_is_flagged()
+    print("ok no stage dates warning")
+    test_ids_follow_the_package_name_and_cut_at_word_boundaries()
+    print("ok ids from package name")
+    test_complete_retries_429_with_retry_after()
+    print("ok 429 retry-after")
+    test_complete_gives_up_after_three_429_retries()
+    print("ok 429 gives up after retries")
+    test_failed_part_is_reported_and_retried_from_cache()
+    print("ok failed part + retry from cache")
     test_roles_the_section_does_not_staff_are_removed()
     print("ok unstated roles removed")
     test_new_urgent_work_can_move_a_project_that_has_not_started()
@@ -829,5 +1402,18 @@ if __name__ == "__main__":
     print("ok empty explain via API")
     test_utilization_uses_active_window_and_upskill_is_offered()
     print("ok active-window util & upskill")
+    test_merging_one_package_never_inflates_headcount()
+    print("ok merge keeps headcount")
+    test_documented_order_keeps_ai_edges_out_of_the_graph()
+    print("ok doc edge breaks AI cycle")
+    test_adding_a_sentence_keeps_other_ids_and_part_cache()
+    print("ok stable ids & part cache")
+    test_bullets_under_one_heading_get_their_own_milestones_and_source()
+    print("ok per-bullet milestones & source")
+    test_risk_sections_and_stage_only_names_are_not_packages()
+    print("ok risks/stage names dropped")
+    test_a_bare_analyst_mention_does_not_keep_the_role()
+    print("ok bare analyst mention")
+    test_explain_late_days_uses_the_missed_stage_date()
+    print("ok late days by stage")
     print("ALL OK")
-
