@@ -1,18 +1,18 @@
 ---
 name: whatif
 description: >
-  Phân loại và trích kịch bản giả định xếp lịch (nghỉ, thuê người, dời hạn).
-  Dùng khi đầu vào là what-if: "nếu X thì sao", "nghỉ N ngày", "thuê QA", "dời deadline".
+  Classify and extract a scheduling what-if scenario (leave, hire, deadline change).
+  Use when the input is a what-if: "what if X", "off for N days", "hire a QA", "move the deadline".
 ---
 
 # What-if extractor
 
-Trả **một** JSON, không markdown.
+The input may be English or Vietnamese. Return **one** JSON object, no markdown.
 
 ```
 {"intent":"what_if","change":{
   "type":"leave|slip|add_person",
-  "detail":"<câu gốc>",
+  "detail":"<original sentence>",
   "person_name":str|null,
   "days":int|null,
   "from":"YYYY-MM-DD"|null,
@@ -25,39 +25,39 @@ Trả **một** JSON, không markdown.
 }}
 ```
 
-## Chọn type
+## Picking the type
 
-| Tín hiệu trong câu | type |
+| Signal in the sentence | type |
 |---|---|
-| nghỉ, nghỉ ốm, nghỉ phép, leave, off, vacation | leave |
-| thuê, hire, thêm QA/PM/engineer/analyst | add_person |
-| dời hạn, dời deadline, lùi hạn, slip | slip |
+| leave, off, vacation, sick, nghỉ, nghỉ ốm, nghỉ phép | leave |
+| hire, add a QA/PM/engineer/analyst, thuê, thêm | add_person |
+| move/push the deadline, slip, dời hạn, lùi hạn | slip |
 
-## leave — thời lượng
+## leave — duration
 
-Đọc **đúng con số** người dùng nói. `days` là số ngày lịch (tính cả hôm nay).
+Use **exactly the number** the user said. `days` is calendar days (today included).
 
-| Câu | days | from / to |
+| Sentence | days | from / to |
 |---|---|---|
-| Ben nghỉ 2 ngày | 2 | null — engine lấy hôm nay → hôm nay+1 |
-| Ivy nghỉ 2 tuần | 14 | null |
-| nghỉ 1 ngày | 1 | null |
-| nghỉ từ 2026-11-02 đến 2026-11-15 | null | điền from và to |
-| Ivy nghỉ (không nêu thời lượng) | null | null — **cấm bịa 14 ngày** |
+| Ben is off 2 days | 2 | null — the engine uses today → today+1 |
+| Ivy on leave 2 weeks | 14 | null |
+| off 1 day | 1 | null |
+| off from 2026-11-02 to 2026-11-15 | null | fill from and to |
+| Ivy is on leave (no duration) | null | null — **never invent 14 days** |
 
-- "N ngày" / "N day(s)" → `days=N`. Không đổi thành tuần.
-- "N tuần" / "N week(s)" → `days=N*7`.
-- "hai ngày" → `days=2`. "một tuần" → `days=7`.
-- Có mốc ngày cụ thể (ISO hoặc dd/mm) thì điền `from`/`to`, `days=null`.
-- `person_name` = tên trong câu (Ben, Ivy, …).
+- "N days" / "N ngày" → `days=N`. Do not convert to weeks.
+- "N weeks" / "N tuần" → `days=N*7`.
+- "two days" / "hai ngày" → `days=2`. "one week" / "một tuần" → `days=7`.
+- With explicit dates (ISO or dd/mm) fill `from`/`to` and set `days=null`.
+- `person_name` = the name in the sentence (Ben, Ivy, …).
 
 ## add_person
 
-- `role` từ {pm, analyst, engineer, qa}. "QA"/"tester" → qa.
-- `level` đúng số trong câu ("level 4" → 4). Không nêu → null (engine mới được gán 3).
-- Cấm hạ level 6 xuống 5 trong JSON; giữ số gốc, engine sẽ cảnh báo.
+- `role` from {pm, analyst, engineer, qa}. "QA"/"tester" → qa.
+- `level` exactly as written ("level 4" → 4). Not stated → null (only the engine may default to 3).
+- Never lower level 6 to 5 in the JSON; keep the original number, the engine will warn.
 
 ## slip
 
-- `project_name` khớp phần tên dự án (Payment gateway, API v2, …).
-- `deadline` nếu câu có ngày mới; không có thì null (engine mới được +14 ngày).
+- `project_name` matches part of the project name (Payment gateway, API v2, …).
+- `deadline` if the sentence gives a new date; otherwise null (only the engine may add 14 days).

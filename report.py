@@ -51,9 +51,9 @@ def render(plan: Plan, people: list[Person], person_stats: list[PersonStats],
     for s in sorted(person_stats, key=lambda x: (-x.util, -x.booked_weeks, x.person.id)):
         flags = []
         if s.overloaded:
-            flags.append("QUÁ TẢI")
+            flags.append("OVERLOADED")
         if s.idle:
-            flags.append("RẢNH")
+            flags.append("IDLE")
         lines.append(
             f"{s.person.name:<18}{s.person.role:<10}"
             f"{s.booked_weeks:>6}w{s.available_weeks:>6}w{s.util:>6.0%}  {', '.join(flags) or '-'}"
@@ -67,7 +67,7 @@ def render(plan: Plan, people: list[Person], person_stats: list[PersonStats],
             lines.append("BOTTLENECKS (roles with unmet demand)")
             lines.append("-" * 78)
             for b in bottlenecks:
-                lines.append(f"  {b['role']} >= {b['level']}: {b.get('detail') or 'kín lịch / thiếu người'}")
+                lines.append(f"  {b['role']} >= {b['level']}: {b.get('detail') or 'fully booked / short of people'}")
 
     # ---- deadline risk ----
     lines.append("")
@@ -78,7 +78,7 @@ def render(plan: Plan, people: list[Person], person_stats: list[PersonStats],
             continue
         note = r.risk
         if r.days_left is not None:
-            note += f" (còn {r.days_left} ngày)"
+            note += f" ({r.days_left} days left)"
         lines.append(f"  {r.project.name:<28} due {r.project.deadline}  -> {note}")
 
     lines.append("")
