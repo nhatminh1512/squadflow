@@ -1,114 +1,71 @@
-# squadflow
+# Squadflow
 
-A project-to-squad assignment engine for an inter-disciplinary team with
-shifting availability and varied expertise. It answers, mechanically, the
-question the team currently answers by hand: *who takes what, and what breaks
-if someone leaves or a deadline slips?*
+Squadflow assigns a squad to each project and shows what breaks when someone is on leave or a deadline moves. A squad is one person per required role: PM, analyst, engineer, and QA.
 
-## The problem it solves
+The planner keeps hard limits: the person matches the role and meets the required skill level, is not on leave, stays within capacity, meets the deadline, and waits for dependencies. It prefers the least senior person who still qualifies, so senior people stay free for work that needs them.
 
-Incoming customer projects (each with size, deadline, required expertise)
-must each be staffed by a squad drawn from PMs, analysts, engineers, and QA.
-Requirements shift: people go on leave, deadlines slip, and the crunch is
-only ever discovered after it has already happened. squadflow assigns the
-projects, flags who is drowning vs. idle, and re-plans automatically when the
-picture changes.
+The web app solves with [OR-Tools](https://developers.google.com/optimization) CP-SAT. Without that library it falls back to a greedy scheduler, and the plan is different.
 
-## Architecture — Hermes Agent's task-splitting, applied
+## Deploy
 
-squadflow is deliberately shaped like Hermes Agent's core. One planning pass
-decomposes into the same kind of phases Hermes decomposes a turn:
-
-| Hermes Agent | squadflow | where |
-|---|---|---|
-| turn loop (`agent/turn_*.py`) — a turn is a pipeline of discrete phases | one pass = `ingest → model → plan → predict → report` | `pipeline.py` |
-| facade + siblings — god files split by topic | one module per phase / concern | `models.py` `engine.py` `analysis.py` `report.py` `cli.py` |
-| `batch_runner._process_batch_worker` / `delegate_task` — independent subtasks in parallel | per-person & per-project metrics computed in a `ThreadPoolExecutor` | `analysis.py` |
-| memory / state — declarative facts | domain objects are plain dataclasses, no logic | `models.py` |
-| skills — procedural knowledge loaded on demand | what-if extractor; document → work packages (manager) | `skills/whatif.md` `skills/decompose.md` |
-| cron / delivery queue — scheduled jobs, incidents | re-plan on change + unstaffable "incidents" surface as a report | `cli.py replan`, `analysis.py` |
-| tools registry — small discoverable subcommands | `assign` / `replan`, one job each | `cli.py` |
-
-The assignment engine is a deterministic, replayable "plan" phase; the
-analysis is an embarrassingly parallel "predict" phase. Re-planning re-runs
-only `plan + predict` and diffs against the previous plan — the same shape as
-a turn re-entering its loop after a mid-flight change.
-
-## Model
-
-- **Person** — `role`, `skills` (role → proficiency 1–5), `capacity` (max
-  concurrent projects), `leave` (date ranges).
-- **Project** — `required` (role → min proficiency), `duration_weeks`,
-  `deadline`, `priority`, optional `depends_on`.
-- **Assignment** — a squad: one person per required role, plus a start week.
-
-Hard constraints (never violated): role match + proficiency ≥ required, no
-booking during leave, concurrent load ≤ capacity, deadline, dependencies.
-
-The objective is realized by one domain rule — **least-qualified-acceptable**:
-a slot is filled by the *least* senior person who still meets the level, so
-seniors stay free for senior-only work. (Assigning the *most* senior person
-first is the trap that makes seniors drown and juniors idle.)
-
-## Usage
-
-### Web UI
+From the repository root:
 
 ```bash
-cd squadflow
-python3 web.py            # → http://localhost:8091
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python web.py
 ```
 
-Or Docker:
+The last command is how you start the app. It listens on `0.0.0.0:8091` and prints:
 
-```bash
-docker compose up -d --build   # → http://<host>:8091
+```text
+squadflow UI → http://localhost:8091
 ```
 
-The UI shows a live plan: a week-by-week timeline per person, utilization
-bars, unstaffable/bottleneck alerts, and controls to change the picture
-(add leave, slip a deadline, add a person or project) — every change re-plans
-immediately.
+Open that URL. The sample roster is `data/people.json` and the sample projects are `data/projects.json`. The planning date in the web app is 19 October 2026.
 
-### CLI
+Use `.venv/bin/python`. System `python3` does not have OR-Tools, so the server warns and plans with the greedy fallback.
+
+### Docker
 
 ```bash
-cd squadflow
+docker compose up -d --build
+```
 
-# assign incoming projects and print the plan
-python3 cli.py --today 2026-10-19 assign \
+The container publishes the same port: `http://localhost:8091`.
+
+## What the UI shows
+
+- Plan health, weekly allocation, project assignments, and team load.
+- Why each person was picked.
+- Changes: ask a what-if, paste a document to split into work packages, or edit leave, deadlines, people, and projects by hand.
+- Re-optimize, then review the before/after table before you approve.
+
+What-if text, document import, and the AI summary need `DEEPSEEK_API_KEY`. Assignment, load, and the rest of the plan do not.
+
+## CLI
+
+```bash
+.venv/bin/python cli.py --today 2026-10-19 assign \
   --people data/people.json --projects data/projects.json
 
-# plans change: someone goes on leave, a deadline slips → re-plan + diff
-python3 cli.py --today 2026-10-19 replan \
+.venv/bin/python cli.py --today 2026-10-19 replan \
   --people data/people.json --projects data/projects.json \
   --leave eng1=2026-10-19:2026-10-30 \
-  --slip  p4=2026-11-27
+  --slip p4=2026-11-27
 ```
 
-The report shows four things the team currently works out by hand:
+`assign` prints the plan. `replan` applies leave or a slipped deadline and prints the delta. The report lists assignments, projects that cannot be staffed (and which role blocked them), utilization (`CRUNCH` / `IDLE`), and bottlenecks.
 
-1. **Assignments** — project → start week → squad.
-2. **Unstaffable** — projects that cannot be staffed, and *which role* blocked them.
-3. **Utilization** — per person: booked vs. available weeks, with `CRUNCH` /
-   `IDLE` flags.
-4. **Bottlenecks** — the (role, level) combinations with unmet demand.
+On the sample data the bottleneck is senior QA: several projects need QA at level 3 or above, and only Ivy qualifies.
 
-## Sample run (what it surfaces)
+## Check
 
-On `data/`, the engine spreads work so nobody is idle and flags one
-irreducible bottleneck:
-
+```bash
+.venv/bin/python test_regressions.py
 ```
-BOTTLENECKS (roles with unmet demand)
-  qa >= 3: no available person (crunch / leave / wrong skill)
-```
-
-That single line is the "crunch nobody saw coming": three projects need
-level-3 QA, but the team has exactly one person who can do it. The tool cannot
-manufacture senior QA capacity — but it says precisely where to act (hire,
-upskill, or defer p1/p7), instead of discovering it after deadlines slip.
 
 ## Requirements
 
-Python 3.10+ standard library only — no dependencies.
+- Python 3.10+
+- `ortools` from `requirements.txt`, installed in `.venv`
